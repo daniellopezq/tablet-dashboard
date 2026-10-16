@@ -1,0 +1,38 @@
+{
+  "_comment": "Copy to config.json and edit. Restart the server after editing (scripts/stop.sh && scripts/start.sh). Keys starting with _ are ignored.",
+  "bind": "0.0.0.0",
+  "port": 8099,
+  "https_port": null,
+  "timezone": "America/Los_Angeles",
+  "clock_default_24h": true,
+  "weather": {
+    "_comment": "Set latitude and longitude (decimal degrees) to enable weather, e.g. 37.7749, -122.4194 with label \"San Francisco\".",
+    "latitude": null,
+    "longitude": null,
+    "label": "",
+    "timezone": "America/Los_Angeles",
+    "temperature_unit": "celsius",
+    "refresh_minutes": 15
+  },
+  "assistant": {
+    "_comment": "Standalone questions via Vercel AI Gateway. The API key is NOT stored here: see README (scripts/set-assistant-key.sh). allowed_hosts: hostnames (besides IPs and localhost) the dashboard is reached by.",
+    "enabled": true,
+    "model": "google/gemini-2.5-flash-lite",
+    "max_output_tokens": 300,
+    "min_interval_seconds": 10,
+    "max_per_hour": 20,
+    "max_per_day": 100,
+    "allowed_hosts": []
+  },
+  "maps": {
+    "_comment": "Weather map slideshow (Maps tab + small card on the Weather tab). See README. Key is in .env.",
+    "zoom": 11
+  },
+  "calendar": {
+    "_comment": "Google Calendar (read-only). Sign in once with: python3 gcal.py auth. Client ID/secret are in .env, the sign-in token in data/gcal-token.json. See README.",
+    "calendar_ids": [
+      "primary"
+    ],
+    "days_ahead": 7
+  }
+}

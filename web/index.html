@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Dashboard</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app row" id="app">
+
+  <nav class="rail col">
+    <div class="rail-clock" id="rail-clock">--:--</div>
+    <button type="button" class="nav-btn active" data-view="weather">
+      <img src="icons/partly.svg" alt=""><span>Weather</span>
+    </button>
+    <button type="button" class="nav-btn" data-view="maps">
+      <img src="icons/map.svg" alt=""><span>Maps</span>
+    </button>
+    <button type="button" class="nav-btn" data-view="cameras">
+      <img src="icons/camera.svg" alt=""><span>Cameras</span>
+    </button>
+    <button type="button" class="nav-btn" data-view="calendar">
+      <img src="icons/calendar.svg" alt=""><span>Calendar</span>
+    </button>
+    <button type="button" class="nav-btn" data-view="assistant">
+      <img src="icons/assistant.svg" alt=""><span>Ask</span>
+    </button>
+    <div class="grow"></div>
+    <div class="tools row">
+      <button type="button" class="tool-btn grow" id="btn-hours">24h</button>
+      <button type="button" class="tool-btn grow" id="btn-diag">Info</button>
+    </div>
+    <div class="tools row">
+      <button type="button" class="tool-btn grow" id="btn-fullscreen">Fullscreen</button>
+    </div>
+  </nav>
+
+  <main class="main grow">
+
+    <section class="view col active" id="view-weather">
+      <div class="home-top row grow">
+        <div class="clock-block col">
+          <div class="time row">
+            <span id="time-main">--:--</span>
+            <span class="time-side col">
+              <span class="ampm" id="time-ampm"></span>
+              <span class="sec" id="time-sec"></span>
+            </span>
+          </div>
+          <div class="date" id="date-line">Connecting to server&hellip;</div>
+          <div class="now-block col" id="wx-now">
+            <div class="wx-label" id="wx-label"></div>
+            <div class="wx-body row" id="wx-body">
+              <div class="wx-main row">
+                <img class="wx-icon" id="wx-icon" src="icons/unknown.svg" alt="">
+                <div class="wx-temp" id="wx-temp">--&deg;</div>
+              </div>
+              <div class="wx-details col">
+                <div class="wx-cond" id="wx-cond"></div>
+                <div class="wx-line"><span id="wx-hilo"></span><span class="wx-sep" id="wx-hum"></span></div>
+              </div>
+            </div>
+            <div class="wx-msg" id="wx-msg">
+              <div class="wx-msg-title" id="wx-msg-title">Loading weather&hellip;</div>
+              <div class="wx-msg-body" id="wx-msg-body"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="home-map grow is-hidden" id="wx-map"><div class="hmap-img show" id="hmap-img-a"></div><div class="hmap-img" id="hmap-img-b"></div><span class="hmap-cap" id="hmap-cap"></span></div>
+      </div>
+
+      <div class="forecast row is-hidden" id="wx-forecast">
+        <div class="fc col grow" id="fc0"><div class="fc-day"></div><img class="fc-icon" src="icons/unknown.svg" alt=""><div class="fc-temps"></div></div>
+        <div class="fc col grow" id="fc1"><div class="fc-day"></div><img class="fc-icon" src="icons/unknown.svg" alt=""><div class="fc-temps"></div></div>
+        <div class="fc col grow" id="fc2"><div class="fc-day"></div><img class="fc-icon" src="icons/unknown.svg" alt=""><div class="fc-temps"></div></div>
+      </div>
+
+      <div class="footer row">
+        <span class="status" id="sync-status"><span class="dot"></span><span id="sync-text">Connecting&hellip;</span></span>
+        <span class="wx-meta grow" id="wx-meta"></span>
+        <a class="attrib" href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Weather data by Open-Meteo.com</a>
+        <a class="attrib attrib-map is-hidden" id="wx-map-attrib" href="https://openweathermap.org/" target="_blank" rel="noopener noreferrer">Maps &copy; OpenWeather, OSM</a>
+      </div>
+    </section>
+
+    <section class="view col" id="view-maps">
+      <div class="map-head row">
+        <strong class="map-title" id="map-title">Maps</strong>
+        <span class="map-sub grow" id="map-sub"></span>
+        <span class="map-dots" id="map-dots"></span>
+      </div>
+      <div class="map-stage grow" id="map-stage">
+        <div class="map-img show" id="map-img-a"></div>
+        <div class="map-img" id="map-img-b"></div>
+        <div class="map-msg" id="map-msg">Loading maps&hellip;</div>
+      </div>
+      <div class="map-foot row" id="map-foot"></div>
+    </section>
+
+    <section class="view col" id="view-cameras">
+      <div class="placeholder col grow">
+        <img src="icons/camera.svg" alt="">
+        <h2>Camera connection pending</h2>
+        <p>No cameras have been connected yet.</p>
+      </div>
+    </section>
+
+    <section class="view col" id="view-calendar">
+      <div class="cal-head row">
+        <strong class="cal-title">Calendar</strong>
+        <span class="cal-sub grow" id="cal-sub"></span>
+      </div>
+      <div class="cal-list grow is-hidden" id="cal-list"></div>
+      <div class="placeholder col grow" id="cal-msg">
+        <img src="icons/calendar.svg" alt="">
+        <h2 id="cal-msg-title">Loading calendar&hellip;</h2>
+        <p id="cal-msg-body"></p>
+      </div>
+    </section>
+
+    <section class="view col" id="view-assistant">
+      <div class="ai-head row">
+        <strong class="ai-title">Ask a question</strong>
+        <span class="ai-note grow">Each question starts fresh.</span>
+        <span class="ai-left" id="ai-left"></span>
+      </div>
+      <textarea id="ai-input" class="ai-input" maxlength="1000" rows="3"
+        placeholder="Type a question&hellip;" autocomplete="off" autocorrect="off"></textarea>
+      <div class="ai-actions row">
+        <button type="button" class="ai-btn primary" id="ai-ask">Ask</button>
+        <button type="button" class="ai-btn" id="ai-clear">Clear</button>
+        <button type="button" class="ai-btn voice" id="ai-voice"><img src="icons/mic.svg" alt=""><span id="ai-voice-label">Voice</span></button>
+        <input type="file" id="ai-voice-file" class="offscreen" accept="audio/*" tabindex="-1">
+        <span class="ai-status grow" id="ai-status"></span>
+        <span class="ai-chars" id="ai-chars">0/1000</span>
+      </div>
+      <div class="ai-answer grow muted" id="ai-answer">Answers appear here.</div>
+    </section>
+
+    <div class="toast is-hidden" id="toast"></div>
+
+    <div class="diag col is-hidden" id="diag">
+      <div class="diag-head row">
+        <strong class="grow">Diagnostics</strong>
+        <button type="button" class="tool-btn" id="btn-diag-close">Close</button>
+      </div>
+      <div class="diag-scroll grow">
+        <table class="diag-table"><tbody id="diag-body"></tbody></table>
+        <p class="diag-note">One-tap voice address: <a id="diag-https-link" href="#">(https not enabled)</a></p>
+        <p class="diag-note">Security certificate (removes the &ldquo;Not secure&rdquo; warning):
+          <a href="/dashboard-ca.crt">dashboard-ca.crt</a><br>
+          After it downloads: Settings &rarr; Security &rarr; Install from storage &rarr; dashboard-ca.crt
+          (Android then requires a screen-lock PIN or pattern).</p>
+      </div>
+    </div>
+
+  </main>
+</div>
+<noscript><div class="noscript">JavaScript is required for the dashboard.</div></noscript>
+<script src="app.js"></script>
+</body>
+</html>

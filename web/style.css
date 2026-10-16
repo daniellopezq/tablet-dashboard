@@ -1,0 +1,457 @@
+/* Tablet dashboard. Conservative CSS for Android 4.4 WebView: flexbox with
+   -webkit- fallbacks, no grid, no custom properties, system fonts only. */
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #0b0f14;
+  color: #e8edf2;
+  font-family: Roboto, "Droid Sans", "Helvetica Neue", Arial, sans-serif;
+  -webkit-text-size-adjust: 100%;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+}
+
+/* ---- flex helpers ---- */
+.row, .col {
+  display: -webkit-box;
+  display: -webkit-flex;
+  display: flex;
+}
+.row { -webkit-box-orient: horizontal; -webkit-flex-direction: row; flex-direction: row; }
+.col { -webkit-box-orient: vertical; -webkit-flex-direction: column; flex-direction: column; }
+.grow { -webkit-box-flex: 1; -webkit-flex: 1 1 0; flex: 1 1 0; min-width: 0; min-height: 0; }
+.is-hidden { display: none !important; }
+
+/* ---- layout ---- */
+.app {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+}
+
+.rail {
+  width: 112px;
+  padding: 8px;
+  box-sizing: border-box;
+  background: #111821;
+  border-right: 1px solid #1e2934;
+}
+.rail-clock {
+  height: 28px;
+  line-height: 28px;
+  text-align: center;
+  font-size: 18px;
+  color: #8b98a5;
+  margin-bottom: 6px;
+}
+.rail-clock.warn { color: #d29922; }
+.rail-clock.bad { color: #f85149; }
+
+button {
+  font-family: inherit;
+  color: inherit;
+  cursor: pointer;
+  outline: none;
+}
+.nav-btn {
+  display: block;
+  width: 100%;
+  height: 56px;
+  margin: 0 0 6px 0;
+  padding: 4px 0 0 0;
+  border: 1px solid #1e2934;
+  border-radius: 10px;
+  background: #16202b;
+  color: #a9b6c3;
+  font-size: 14px;
+}
+.nav-btn img { display: block; width: 28px; height: 28px; margin: 0 auto 2px auto; }
+.nav-btn span { display: block; }
+.nav-btn.active { background: #1f6feb; border-color: #388bfd; color: #ffffff; }
+
+.tools { margin-top: 6px; }
+.tool-btn {
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid #2b3846;
+  border-radius: 8px;
+  background: #16202b;
+  font-size: 15px;
+}
+.tools .tool-btn + .tool-btn { margin-left: 6px; }
+.tool-btn.unsupported { color: #6e7d8c; border-style: dashed; }
+
+.toast {
+  position: absolute;
+  left: 16px; right: 16px; bottom: 34px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #2d3b4a;
+  color: #e8edf2;
+  font-size: 15px;
+  text-align: center;
+  z-index: 20;
+}
+.tool-btn:active, .nav-btn:active { background: #263445; }
+
+.main { position: relative; overflow: hidden; }
+
+.view {
+  display: none;
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  padding: 12px 16px 8px 16px;
+  box-sizing: border-box;
+}
+.view.active {
+  display: -webkit-box;
+  display: -webkit-flex;
+  display: flex;
+}
+
+/* ---- clock ---- */
+.home-top { -webkit-box-align: start; -webkit-align-items: flex-start; align-items: flex-start; }
+.clock-block { padding-top: 4px; -webkit-align-self: stretch; align-self: stretch; overflow: hidden; }
+.time {
+  -webkit-align-self: flex-start; align-self: flex-start;
+  font-size: 112px;
+  line-height: 1;
+  font-weight: 300;
+  letter-spacing: -2px;
+  white-space: nowrap;
+}
+.time-side {
+  margin-left: 8px;
+  padding-top: 10px;
+  letter-spacing: 0;
+}
+.ampm { font-size: 26px; color: #8b98a5; line-height: 1.1; height: 30px; }
+.sec { font-size: 34px; color: #6e7d8c; line-height: 1.1; }
+.date {
+  -webkit-align-self: flex-start; align-self: flex-start; max-width: 100%;
+  margin-top: 6px;
+  font-size: 26px;
+  color: #b8c4cf;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- current weather ---- */
+.now-block {
+  /* compact strip under the date */
+  -webkit-align-self: stretch; align-self: stretch;
+  margin-top: 10px;
+  padding: 6px 12px 8px 12px;
+  box-sizing: border-box;
+  background: #121a23;
+  border: 1px solid #1e2934;
+  border-radius: 12px;
+}
+.wx-label { font-size: 15px; color: #8b98a5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 18px; }
+.wx-main { -webkit-box-align: center; -webkit-align-items: center; align-items: center; }
+.wx-body { -webkit-box-align: center; -webkit-align-items: center; align-items: center; }
+.wx-icon { width: 48px; height: 48px; margin-right: 8px; }
+.wx-temp { font-size: 46px; font-weight: 300; line-height: 1.1; white-space: nowrap; }
+.wx-details { margin-left: 14px; min-width: 0; }
+.wx-cond { font-size: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wx-line { font-size: 16px; color: #b8c4cf; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wx-sep:before { content: ' \00b7  '; }
+.wx-sep:empty:before { content: ''; }
+.wx-msg { padding: 8px 0; }
+.wx-msg-title { font-size: 20px; color: #e8edf2; }
+.wx-msg-body { font-size: 15px; color: #8b98a5; margin-top: 6px; line-height: 1.35; }
+.now-block.has-msg .wx-body { display: none; }
+.now-block .wx-msg { display: none; }
+.now-block.has-msg .wx-msg { display: block; }
+
+/* ---- forecast ---- */
+.forecast { height: 104px; margin-top: 8px; }
+.fc {
+  margin-right: 8px;
+  padding: 6px 4px;
+  box-sizing: border-box;
+  text-align: center;
+  background: #121a23;
+  border: 1px solid #1e2934;
+  border-radius: 10px;
+  -webkit-box-align: center;
+  -webkit-align-items: center;
+  align-items: center;
+}
+.fc:last-child { margin-right: 0; }
+.fc-day { font-size: 17px; color: #b8c4cf; }
+.fc-icon { width: 40px; height: 40px; margin: 4px 0; }
+.fc-temps { font-size: 18px; white-space: nowrap; }
+.fc-temps .lo { color: #8b98a5; }
+
+/* ---- footer ---- */
+.footer {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #8b98a5;
+  white-space: nowrap;
+  -webkit-box-align: center;
+  -webkit-align-items: center;
+  align-items: center;
+}
+.status .dot {
+  display: inline-block;
+  width: 9px; height: 9px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #6e7d8c;
+  vertical-align: middle;
+}
+.status.ok .dot { background: #3fb950; }
+.status.warn .dot { background: #d29922; }
+.status.warn { color: #d29922; }
+.status.bad .dot { background: #f85149; }
+.status.bad { color: #f85149; }
+.wx-meta { margin: 0 10px; overflow: hidden; text-overflow: ellipsis; }
+.wx-meta.warn { color: #d29922; }
+.attrib { color: #58a6ff; text-decoration: none; }
+
+/* ---- assistant ---- */
+.ai-head { -webkit-box-align: baseline; -webkit-align-items: baseline; align-items: baseline; margin-bottom: 6px; white-space: nowrap; }
+.ai-title { font-size: 22px; font-weight: 400; }
+.ai-note { margin-left: 12px; font-size: 15px; color: #8b98a5; overflow: hidden; text-overflow: ellipsis; }
+.ai-left { font-size: 13px; color: #6e7d8c; }
+.ai-input {
+  display: block;
+  width: 100%;
+  height: 78px;
+  margin: 0;
+  padding: 8px 10px;
+  box-sizing: border-box;
+  resize: none;
+  border: 1px solid #2b3846;
+  border-radius: 10px;
+  background: #0f151c;
+  color: #e8edf2;
+  font-family: inherit;
+  font-size: 20px;
+  line-height: 1.25;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-appearance: none;
+}
+.ai-input:focus { border-color: #388bfd; }
+.ai-actions { margin: 8px 0; -webkit-box-align: center; -webkit-align-items: center; align-items: center; }
+.ai-btn {
+  height: 44px;
+  min-width: 92px;
+  padding: 0 18px;
+  border: 1px solid #2b3846;
+  border-radius: 10px;
+  background: #16202b;
+  font-size: 18px;
+  margin-right: 8px;
+}
+.ai-btn.primary { background: #1f6feb; border-color: #388bfd; color: #ffffff; }
+.ai-btn:active { background: #263445; }
+.ai-btn.primary:active { background: #1858c0; }
+.ai-btn[disabled] { opacity: 0.5; }
+.ai-btn img { width: 20px; height: 20px; vertical-align: middle; margin: -3px 6px 0 0; }
+.ai-btn.recording { background: #b62324; border-color: #f85149; color: #ffffff; }
+.offscreen { position: absolute; left: -9999px; top: 0; width: 1px; height: 1px; opacity: 0; }
+.ai-status { font-size: 14px; color: #8b98a5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-status.warn { color: #d29922; }
+.ai-status.bad { color: #f85149; }
+.ai-status a { color: #58a6ff; text-decoration: underline; padding: 6px 0; }
+.ai-chars { font-size: 13px; color: #6e7d8c; margin-left: 8px; white-space: nowrap; }
+.ai-answer {
+  padding: 10px 12px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  background: #121a23;
+  border: 1px solid #1e2934;
+  border-radius: 10px;
+  font-size: 20px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.ai-answer.muted { color: #6e7d8c; }
+.ai-answer.error { color: #f0b429; }
+
+/* ---- calendar ---- */
+.cal-head { -webkit-box-align: baseline; -webkit-align-items: baseline; align-items: baseline; margin-bottom: 6px; white-space: nowrap; }
+.cal-title { font-size: 22px; font-weight: 400; }
+.cal-sub { margin-left: 12px; font-size: 14px; color: #8b98a5; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+.cal-sub.warn { color: #d29922; }
+.cal-list { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.cal-day {
+  margin: 8px 0 4px 0;
+  font-size: 15px;
+  color: #8b98a5;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.cal-day:first-child { margin-top: 0; }
+.cal-day.today { color: #58a6ff; }
+.cal-ev {
+  margin-bottom: 5px;
+  padding: 6px 10px;
+  background: #121a23;
+  border: 1px solid #1e2934;
+  border-left: 4px solid #2b3846;
+  border-radius: 8px;
+  -webkit-box-align: center; -webkit-align-items: center; align-items: center;
+}
+.cal-ev.now { border-left-color: #3fb950; background: #13221a; }
+.cal-ev.past { opacity: 0.45; }
+.cal-time { width: 92px; font-size: 17px; white-space: nowrap; }
+.cal-time .end { display: block; font-size: 13px; color: #8b98a5; }
+.cal-what { min-width: 0; }
+.cal-ev-title { font-size: 19px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-ev-loc { font-size: 14px; color: #8b98a5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-empty { padding: 4px 2px 6px 2px; font-size: 16px; color: #6e7d8c; }
+
+/* ---- placeholders ---- */
+.placeholder {
+  -webkit-box-align: center; -webkit-align-items: center; align-items: center;
+  -webkit-box-pack: center; -webkit-justify-content: center; justify-content: center;
+  text-align: center;
+  color: #8b98a5;
+}
+.placeholder img { width: 72px; height: 72px; opacity: 0.6; }
+.placeholder h2 { margin: 14px 0 6px 0; font-size: 26px; font-weight: 400; color: #e8edf2; }
+.placeholder p { margin: 0; font-size: 16px; }
+
+/* ---- diagnostics ---- */
+.diag {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  padding: 10px 14px;
+  box-sizing: border-box;
+  background: #0b0f14;
+  z-index: 10;
+}
+.diag-head { -webkit-box-align: center; -webkit-align-items: center; align-items: center; font-size: 18px; margin-bottom: 8px; }
+.diag-head .tool-btn { margin-left: 8px; }
+.diag-scroll { overflow: auto; -webkit-overflow-scrolling: touch; -webkit-user-select: text; user-select: text; }
+.diag-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.diag-table th, .diag-table td { padding: 4px 6px; border-bottom: 1px solid #1e2934; text-align: left; vertical-align: top; }
+.diag-table th { width: 34%; color: #8b98a5; font-weight: 400; }
+.diag-table td { word-wrap: break-word; word-break: break-all; }
+.diag-note { font-size: 13px; color: #8b98a5; }
+.diag-note a { color: #58a6ff; }
+
+.noscript { padding: 20px; font-size: 20px; }
+
+/* ---- maps slideshow ---- */
+.map-head { -webkit-box-align: baseline; -webkit-align-items: baseline; align-items: baseline; margin-bottom: 6px; }
+.map-title { font-size: 22px; }
+.map-sub { margin-left: 12px; font-size: 14px; color: #8b98a5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.map-dots { font-size: 14px; color: #8b98a5; white-space: nowrap; }
+.map-stage { position: relative; overflow: hidden; background: #0b0f14; border: 1px solid #1e2934; border-radius: 8px; }
+.map-img {
+  /* fills the panel; 'cover' crops the edges, keeping the centre (our location) */
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  background-repeat: no-repeat; background-position: center; background-size: cover;
+  opacity: 0;
+  -webkit-transition: opacity 0.6s; transition: opacity 0.6s;
+}
+.map-img.show { opacity: 1; }
+.home-map {
+  /* fills the right of the top row; the 2:1 image is scaled with 'cover' */
+  position: relative; margin-left: 16px; overflow: hidden;
+  -webkit-align-self: stretch; align-self: stretch;
+  background: #0b0f14; border: 1px solid #1e2934; border-radius: 10px; cursor: pointer;
+}
+.hmap-img {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  background-repeat: no-repeat; background-position: center; background-size: cover;
+  opacity: 0; -webkit-transition: opacity 0.6s; transition: opacity 0.6s;
+}
+.hmap-img.show { opacity: 1; }
+.home-map.is-tiny { visibility: hidden; }
+.hmap-cap {
+  position: absolute; left: 0; bottom: 0; padding: 1px 6px; font-size: 12px;
+  background: rgba(11, 15, 20, 0.7); color: #e8edf2; border-top-right-radius: 6px;
+}
+.attrib-map { margin-left: 10px; }
+.map-msg { position: absolute; top: 40%; left: 10%; right: 10%; text-align: center; font-size: 17px; color: #a9b6c3; }
+.map-foot { margin-top: 5px; font-size: 11px; }
+.map-foot .attrib + .attrib { margin-left: 14px; }
+
+/* ---- smaller CSS viewports (e.g. 800x400 physical at 1.5 density = 533x267) ---- */
+@media (max-width: 720px), (max-height: 360px) {
+  .rail { width: 84px; padding: 6px; }
+  .rail-clock { font-size: 15px; height: 22px; line-height: 22px; margin-bottom: 4px; }
+  .nav-btn { height: 30px; font-size: 11px; margin-bottom: 3px; padding: 0; line-height: 28px; }
+  .nav-btn img { display: inline-block; width: 16px; height: 16px; margin: 0 3px 0 0; vertical-align: middle; }
+  .nav-btn span { display: inline; vertical-align: middle; }
+  .ai-title { font-size: 17px; }
+  .ai-note { font-size: 12px; margin-left: 8px; }
+  .ai-left { font-size: 11px; }
+  .ai-input { height: 52px; font-size: 15px; padding: 5px 8px; border-radius: 8px; }
+  .ai-actions { margin: 5px 0; }
+  .ai-btn { height: 34px; min-width: 70px; padding: 0 12px; font-size: 15px; margin-right: 6px; border-radius: 8px; }
+  .ai-btn img { width: 16px; height: 16px; margin-right: 4px; }
+  .ai-status { font-size: 12px; }
+  .ai-chars { font-size: 11px; }
+  .ai-answer { font-size: 15px; padding: 6px 8px; border-radius: 8px; }
+  .tools { margin-top: 4px; }
+  .tool-btn { height: 30px; font-size: 12px; padding: 0 4px; }
+  .toast { font-size: 13px; bottom: 24px; padding: 8px 10px; }
+  .view { padding: 8px 10px 6px 10px; }
+  .time { font-size: 76px; letter-spacing: -1px; }
+  .time-side { padding-top: 6px; margin-left: 5px; }
+  .ampm { font-size: 18px; height: 22px; }
+  .sec { font-size: 24px; }
+  .date { font-size: 18px; margin-top: 4px; }
+  .now-block { margin-top: 6px; padding: 4px 8px 5px 8px; }
+  .wx-label { font-size: 12px; min-height: 14px; }
+  .wx-icon { width: 34px; height: 34px; margin-right: 6px; }
+  .wx-temp { font-size: 32px; }
+  .wx-details { margin-left: 10px; }
+  .wx-cond { font-size: 15px; }
+  .wx-line { font-size: 12px; margin-top: 1px; }
+  .wx-msg-title { font-size: 16px; }
+  .wx-msg-body { font-size: 12px; }
+  .forecast { height: 78px; margin-top: 6px; }
+  .home-map { margin-left: 10px; border-radius: 8px; }
+  .hmap-cap { font-size: 10px; padding: 0 4px; }
+  .attrib-map { margin-left: 6px; }
+  .fc { padding: 4px 2px; margin-right: 6px; }
+  .fc-day { font-size: 13px; }
+  .fc-icon { width: 28px; height: 28px; margin: 2px 0; }
+  .fc-temps { font-size: 14px; }
+  .footer { font-size: 10px; margin-top: 5px; }
+  .map-title { font-size: 17px; }
+  .map-sub, .map-dots { font-size: 11px; }
+  .map-head { margin-bottom: 4px; }
+  .map-msg { font-size: 13px; }
+  .map-foot { font-size: 10px; margin-top: 3px; }
+  .cal-title { font-size: 17px; }
+  .cal-sub { font-size: 11px; margin-left: 8px; }
+  .cal-head { margin-bottom: 4px; }
+  .cal-day { font-size: 11px; margin: 5px 0 3px 0; }
+  .cal-ev { padding: 3px 6px; margin-bottom: 3px; border-left-width: 3px; border-radius: 6px; }
+  .cal-time { width: 64px; font-size: 13px; }
+  .cal-time .end { font-size: 10px; }
+  .cal-ev-title { font-size: 14px; }
+  .cal-ev-loc { font-size: 11px; }
+  .cal-empty { font-size: 12px; }
+  .placeholder img { width: 48px; height: 48px; }
+  .placeholder h2 { font-size: 19px; }
+  .placeholder p { font-size: 13px; }
+}
+
+@media (max-height: 300px) {
+  .wx-label { display: none; }
+}
+
+@media (max-width: 480px) {
+  .time { font-size: 56px; }
+  .attrib { font-size: 10px; }
+}
