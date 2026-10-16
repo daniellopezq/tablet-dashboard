@@ -28,7 +28,7 @@ import gcal as gcal_mod
 import maps as maps_mod
 import voice as voice_mod
 
-VERSION = "0.2.0"
+VERSION = "0.6.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 USER_AGENT = "TabletDashboard/%s (personal home dashboard)" % VERSION

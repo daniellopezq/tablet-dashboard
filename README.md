@@ -258,6 +258,10 @@ credit.
 - On an 800 × 400 screen the on-screen keyboard covers much of the Ask tab.
 - Provider free tiers and rate limits change. Check current terms before relying on them.
 
+## Versions
+
+See [VERSION.md](VERSION.md) for the version history.
+
 ## License
 
 [MIT](LICENSE) © 2026 Daniel Lopez Quezada
