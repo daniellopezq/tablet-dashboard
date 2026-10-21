@@ -1,11 +1,10 @@
 # Tablet Dashboard
 
-Turn an old Android tablet into an always-on home dashboard: clock, weather, animated weather maps, a Google Calendar agenda,
-a voice-enabled AI assistant, Home Assistant buttons and a Cameras tab with live view.
+**A self-hosted home dashboard for an Android 4.4 tablet (800 × 400, Chrome 50).** It combines clock, weather, maps, read-only calendar, an AI/voice assistant, service uptime, Home Assistant controls, and camera monitoring—including local RTSP live view.
 
-A small Python server on your home network does the work. It fetches weather, maps and calendar events, calls the AI
-services and keeps API keys private. The tablet just shows a lightweight web page. The project was built for an Android 4.4
-tablet (800 × 400, Chrome 50), so it runs on hardware most modern web apps can't support.
+The tablet runs plain ES5 JavaScript; a lightweight Python server handles APIs, caching, media conversion and private keys. Cloud AI and transcription can fall back to small local models when the cloud fails to respond. The goal is to make otherwise obsolete hardware useful without replacing it or depending on a modern browser.
+
+**Current release:** [0.14.0](VERSION.md) (October 2026). The repository documents **227 unittest tests**; upstream services and camera processes are mocked in tests, and compatibility still needs real-device checks.
 
 ## What it does
 
@@ -16,15 +15,13 @@ tablet (800 × 400, Chrome 50), so it runs on hardware most modern web apps can'
 - **Ask:** type or speak a question and get a short AI answer. Voice uses one tap and stops on its own when you stop talking.
 - **Built for always-on use:** fullscreen mode, a diagnostics panel, usage limits so free API tiers aren't exceeded, and
   old data stays on screen when a service is down.
-- **Local fallback:** when the internet is down, small models on the server (llama.cpp and whisper.cpp) answer Ask and Voice
-  instead, and the page labels those answers.
+- **Local fallback:** when cloud AI or speech services provide no response before the configured deadline, llama.cpp and whisper.cpp can answer locally; the UI labels fallback results. An HTTP error response does **not** trigger fallback.
 - **Admin page:** a password-protected, LAN-only page for API keys, AI models (cloud and local), Google sign-in, health checks
   and optional Uptime Kuma monitors, settings, logs and an offline test switch for trying the fallbacks.
-- **Touch-friendly:** big Back/Next buttons to move between sections, and long answers paged with big buttons, for poor
-  touchscreens.
-- **Home:** big tiles that toggle Home Assistant lights, plugs, scripts and alarms, with live ON/OFF state.
-- **Cameras:** snapshots and motion pop-ups from Home Assistant cameras (e.g. Blink), plus live view of local RTSP
-  cameras (e.g. V380) that keeps working without the internet.
+- **Touch-friendly:** oversized Back/Next controls, large targets, and paged AI answers for a worn touchscreen.
+- **Uptime:** Uptime Kuma and configured TCP/HTTP health monitors, with status, response times and a short history.
+- **Home:** large Home Assistant tiles for lights, plugs, scripts and configured alarm actions, with current device state; optional Plex/Jellyfin switch.
+- **Cameras:** Home Assistant camera snapshots and motion pop-ups (e.g. Blink), plus RTSP-to-MJPEG live viewing of local cameras (e.g. V380) through an on-demand FFmpeg process.
 
 ## Why it's useful
 
@@ -32,6 +29,11 @@ tablet (800 × 400, Chrome 50), so it runs on hardware most modern web apps can'
 - Self-hosted and LAN-only. API keys never reach the browser, and logs never store your questions, answers or audio.
 - Light enough for 1 GB RAM devices, and a very old browser is enough.
 - Every external service is optional. Each one stays off until you add its key.
+- Local controls and RTSP cameras can keep working when the internet is unavailable; integrations that depend on a cloud provider (including some Home Assistant cameras) cannot.
+
+### Engineering choices
+
+The browser is a thin client: no frontend build, modern JavaScript syntax, or heavy map/video libraries. The server pre-renders map images, proxies camera stills without exposing Home Assistant credentials, and transcodes RTSP to MJPEG for old browser support. On the 2014-era host, measured benchmarks favored **CPU inference for Qwen3.5-2B** and **Vulkan GPU inference for Whisper base**; see [local AI benchmarks](docs/LOCAL-AI-BENCHMARKS.md). Services retain last-good data where possible, and fallback states are visible rather than silently treated as normal responses.
 
 ## Tools and services
 
@@ -53,7 +55,7 @@ tablet (800 × 400, Chrome 50), so it runs on hardware most modern web apps can'
 ## Quick start
 
 ```bash
-git clone <this repo> tablet-dashboard && cd tablet-dashboard
+git clone https://github.com/daniellopezq/tablet-dashboard.git && cd tablet-dashboard
 cp config.example.json config.json   # set your timezone and weather location
 python3 server.py --check            # validate the config
 scripts/start.sh                     # runs in the background, log in logs/dashboard.log
@@ -74,6 +76,8 @@ Optional features need extra setup and stay disabled or show a "not set up" mess
 | Admin page | https, and a password set with `scripts/set-admin-password.sh` |
 | Local fallback | llama.cpp and whisper.cpp builds plus model files in a `local-ai/` folder next to this project (see "Local fallback") |
 | Uptime Kuma | A Kuma instance; `base_url` plus a status page slug, or `KUMA_API` in `.env` |
+| Home Assistant | A running Home Assistant instance, its `ha_url`, configured `home.buttons`, and `HA_TOKEN` stored in `.env` |
+| Cameras | `cameras.list`; HA camera entities for snapshots, or local RTSP feeds and FFmpeg for live view; see the camera section |
 
 ## Layout
 
@@ -89,6 +93,8 @@ Optional features need extra setup and stay disabled or show a "not set up" mess
 | `health.py` | Health checks and the optional Uptime Kuma client (status page, `/metrics`, push heartbeat) |
 | `localai.py` | Local model inventory, choice (`local_ai` in config) and start/stop for the admin page |
 | `netsim.py` | Offline test switch (simulated internet outage inside the dashboard only) |
+| `home.py` | Home Assistant controls, rate limits, current device states and optional Plex/Jellyfin switch |
+| `cameras.py` | Home Assistant snapshots/motion and on-demand FFmpeg RTSP-to-MJPEG live feeds |
 | `envfile.py` | Owner-only file helpers for `.env` and other private files |
 | `config.example.json` | Example settings; copy to `config.json` (gitignored) |
 | `.env` | **Private** API keys (mode 600; never served, gitignored) |
@@ -116,6 +122,7 @@ Optional features need extra setup and stay disabled or show a "not set up" mess
 | `weather.stale_after_minutes` | `35` | Older data is marked stale |
 | `assistant.*`, `voice.*`, `maps.*`, `calendar.*` | | See the sections below |
 | `local_ai.*`, `health.*`, `kuma.*`, `admin.*` | | See "Local fallback" and "Admin page"; full tables in [docs/ADMIN-PANEL.md](docs/ADMIN-PANEL.md) |
+| `home.*`, `cameras.*` | | Optional Home Assistant, local device control and camera definitions; see the Home and Cameras sections |
 
 The weather location is never guessed from the timezone or IP address. Keys starting with `_` are ignored, so you can use
 them for comments. Restart after editing: `scripts/stop.sh && scripts/start.sh`.
@@ -170,8 +177,8 @@ Only GET and HEAD are accepted, apart from the POST routes above. Idle connectio
   whenever the page becomes visible or the local clock jumps. The footer shows sync status (green, amber or red).
 - **Weather:** the server fetches Open-Meteo every 15 min and backs off after failures (1, 2, 4, 8 min). It keeps the last
   good data, which the page marks "Stale".
-- **Navigation:** the left rail has big **Back** / **Next** buttons that step through Weather, Maps, Cameras, Calendar,
-  Uptime and Ask (wrapping around), with the current section name between them. Tapping the name opens a full-screen grid to jump to
+- **Navigation:** the left rail has big **Back** / **Next** buttons that step through Weather, Home, Maps, Cameras,
+  Calendar, Uptime and Ask (wrapping around), with the current section name between them. Tapping the name opens a full-screen grid to jump to
   any section. **More…** holds 12h/24h, Info and Fullscreen as big buttons. Taps in the first 300 ms after a panel opens
   are ignored, for poor touchscreens.
 - **Uptime:** Uptime Kuma monitors first, then the services under `health.targets` in `config.json`, 4 cards per page
@@ -376,6 +383,9 @@ Optional; bring your own [Home Assistant](https://www.home-assistant.io/). One l
   allowing only it for the dashboard's user. Leave it out of `home.buttons` if you don't want it.
 
 Devices with local control work without the internet; cloud integrations don't.
+
+**Access boundary:** the Home action endpoint currently trusts accepted LAN clients; it has origin checks and rate limits but **does not require an authenticated admin session**. A tile's `"confirm": true` is a usability safeguard, not authorization. Avoid configuring security-critical actions such as alarm disarming until stronger access controls are added; do not expose this endpoint to the internet.
+
 **Tests:** `python3 -m unittest tests.test_home` (fake systemctl/sudo and a mock HA; nothing is switched).
 
 ## Cameras tab
@@ -397,15 +407,13 @@ battery cameras. **Motion pop-up:** the tablet checks `/api/cameras` every 15 s 
 - The tile shows a still that refreshes every `still_seconds` (10). Tap it for the **live view**; **Restart live**
   reconnects, and after `live_max_seconds` (600) it pauses with **Resume live**. The page drops the stream when you leave
   the camera, change tabs or the screen turns off.
-- The server runs one ffmpeg per camera, only while someone watches, turning H.264 into MJPEG. Chrome 50 shows MJPEG in a
-  plain `<img>` but can't be relied on to play a live H.264 stream. All viewers share that ffmpeg, which stops
-  `live_idle_seconds` (15) after the last one. A 640x360 sub-stream at 10 fps costs about 10% of one CPU core.
+- The server starts one shared FFmpeg process per RTSP camera on demand for live viewing or grid stills, turning H.264 into MJPEG. Chrome 50 displays MJPEG in a plain `<img>` but cannot reliably play a live H.264 stream. The process stops after `live_idle_seconds` (15) without viewers or still requests. Use a small sub-stream; actual CPU usage depends on the camera and server and should be measured.
 - V380 cameras: turn on **ONVIF** in the V380 Pro app; RTSP then opens on port 554 (`/live/ch00_0` main, `/live/ch00_1`
   sub-stream). Use the sub-stream.
 - `rtsp_url` may not contain a user:password or a query. Settings: `cameras.ffmpeg_path`, `still_seconds`,
   `live_idle_seconds`, `live_max_seconds`, and per camera `live_fps` (1-15).
 
-**Tests:** `python3 -m unittest tests.test_cameras` (mock HA; a fake ffmpeg for RTSP cameras).
+**Tests:** `python3 -m unittest tests.test_cameras` (mock HA; a fake FFmpeg process for RTSP cameras). These tests do not establish compatibility or resource use with a physical camera and the original tablet.
 
 ## Weather data
 
@@ -414,10 +422,18 @@ only** (under 10,000 calls a day; this dashboard makes about 96). The data is
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), and the page shows the required "Weather data by Open-Meteo.com"
 credit.
 
+## Network trust and planned security work
+
+This release is for a **trusted local network**, not public hosting or remote access. The admin page uses HTTPS and a login, but **Home actions and camera endpoints rely primarily on LAN restrictions**. Network names or separate Wi-Fi SSIDs alone do not guarantee isolation; enforce device separation with actual network access rules where available. Keep guest/untrusted devices from reaching the dashboard, and do not reverse-proxy these endpoints onto the public internet as-is.
+
+Per-action authorization, especially for security-sensitive home controls, and an authenticated remote-access gateway are future work after the core experience is stable. This is an explicitly accepted current limitation, not a claim of hardened security.
+
 ## Known limitations
 
-- Cameras: HA cameras such as Blink give snapshots only, no live view. RTSP cameras without a password are visible to anyone on the LAN.
+- Cameras: Home Assistant/Blink feeds provide snapshots rather than live video. RTSP feeds and camera images are accessible to accepted LAN clients without a separate camera login; use trusted camera endpoints and network access rules.
 - English-only day and month names.
+- The RTSP live-view path is still being stabilized; initial-frame timeouts and real-hardware behavior require verification before calling the feature production-ready.
+- Home/camera hardware compatibility and the new tablet UI still need full end-to-end validation on the original Android 4.4 device. The automated suite uses mocks.
 - Logs are not rotated.
 - Answers are not streamed and can take a few seconds.
 - On an 800 × 400 screen the on-screen keyboard covers much of the Ask tab.
