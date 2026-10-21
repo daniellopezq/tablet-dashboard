@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Store (or remove) an API key (default AI_GATEWAY_API_KEY) in the private .env file next to server.py.
+# Store (or remove) the AI Gateway API key in the private .env file next to server.py.
 #   scripts/set-assistant-key.sh            prompt for a key (input hidden), save it
 #   scripts/set-assistant-key.sh --remove   delete the key from the file
 # The key is never echoed, never passed as a command-line argument, and the file is created
@@ -24,7 +24,7 @@ if [ "${1:-}" = "--remove" ]; then
   other_lines > "$TMP"
   if [ -s "$TMP" ]; then mv "$TMP" "$ENV_FILE"; chmod 600 "$ENV_FILE"; else rm -f "$TMP" "$ENV_FILE"; fi
   echo "Key removed from $(pwd)/$ENV_FILE."
-  echo "Also revoke it in the provider's dashboard."
+  echo "Also revoke it in the Vercel dashboard (AI Gateway > API Keys)."
   exit 0
 fi
 
@@ -32,7 +32,7 @@ if [ ! -t 0 ]; then
   echo "Run this in an interactive terminal so the key can be typed without echo." >&2
   exit 1
 fi
-read -r -s -p "Paste the value for $NAME (input is hidden): " KEY
+read -r -s -p "Paste the AI Gateway API key (input is hidden): " KEY
 echo
 KEY=${KEY//[$'\r\n\t ']/}
 if ! [[ "$KEY" =~ ^[A-Za-z0-9._~+/=-]{8,512}$ ]]; then

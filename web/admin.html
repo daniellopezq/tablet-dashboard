@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:,">
+<title>Dashboard Admin</title>
+<link rel="stylesheet" href="admin.css">
+</head>
+<body>
+<div id="login" class="login hidden">
+  <form id="login-form" class="login-box">
+    <h1>Dashboard admin</h1>
+    <p class="muted" id="login-note">Sign in with the admin password.</p>
+    <input type="password" id="login-password" autocomplete="current-password" placeholder="Password" required>
+    <button type="submit" class="primary">Sign in</button>
+    <p class="msg" id="login-msg"></p>
+  </form>
+</div>
+
+<div id="app" class="app hidden">
+  <nav class="side">
+    <div class="brand">Dashboard <span id="version" class="muted"></span></div>
+    <a href="#overview" data-view="overview">Overview</a>
+    <a href="#keys" data-view="keys">API keys</a>
+    <a href="#ai" data-view="ai">AI models</a>
+    <a href="#offline" data-view="offline">Offline test</a>
+    <a href="#calendar" data-view="calendar">Google Calendar</a>
+    <a href="#health" data-view="health">Health &amp; uptime</a>
+    <a href="#settings" data-view="settings">Settings</a>
+    <a href="#logs" data-view="logs">Logs &amp; usage</a>
+    <a href="#maint" data-view="maint">Maintenance</a>
+    <div class="grow"></div>
+    <a href="/" target="_blank" rel="noopener">Open dashboard ↗</a>
+    <button type="button" id="logout" class="link">Sign out</button>
+  </nav>
+  <main>
+    <div id="offline-banner" class="banner bad hidden"></div>
+    <div id="restart-banner" class="banner warn hidden">
+      Some saved settings need a restart. <button type="button" id="restart-now" class="small">Restart dashboard</button>
+    </div>
+    <section id="view"></section>
+  </main>
+</div>
+<script src="admin.js"></script>
+</body>
+</html>

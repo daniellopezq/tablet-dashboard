@@ -12,29 +12,16 @@
 
   <nav class="rail col">
     <div class="rail-clock" id="rail-clock">--:--</div>
-    <button type="button" class="nav-btn active" data-view="weather">
-      <img src="icons/partly.svg" alt=""><span>Weather</span>
+    <div class="offline-tag" id="offline-tag">OFFLINE TEST</div>
+    <!-- big Back/Next targets for a poor touchscreen; tapping the name opens the jump grid -->
+    <button type="button" class="step-btn grow" id="nav-back"><span class="step-arrow">&#9650;</span>Back</button>
+    <button type="button" class="nav-current" id="nav-current">
+      <img id="nav-current-icon" src="icons/partly.svg" alt="">
+      <span class="nav-current-name" id="nav-current-name">Weather</span>
+      <span class="nav-current-pos" id="nav-current-pos">1 / 5</span>
     </button>
-    <button type="button" class="nav-btn" data-view="maps">
-      <img src="icons/map.svg" alt=""><span>Maps</span>
-    </button>
-    <button type="button" class="nav-btn" data-view="cameras">
-      <img src="icons/camera.svg" alt=""><span>Cameras</span>
-    </button>
-    <button type="button" class="nav-btn" data-view="calendar">
-      <img src="icons/calendar.svg" alt=""><span>Calendar</span>
-    </button>
-    <button type="button" class="nav-btn" data-view="assistant">
-      <img src="icons/assistant.svg" alt=""><span>Ask</span>
-    </button>
-    <div class="grow"></div>
-    <div class="tools row">
-      <button type="button" class="tool-btn grow" id="btn-hours">24h</button>
-      <button type="button" class="tool-btn grow" id="btn-diag">Info</button>
-    </div>
-    <div class="tools row">
-      <button type="button" class="tool-btn grow" id="btn-fullscreen">Fullscreen</button>
-    </div>
+    <button type="button" class="step-btn grow" id="nav-next">Next<span class="step-arrow">&#9660;</span></button>
+    <button type="button" class="tool-btn more-btn" id="btn-more">More&hellip;</button>
   </nav>
 
   <main class="main grow">
@@ -127,17 +114,28 @@
         <span class="ai-note grow">Each question starts fresh.</span>
         <span class="ai-left" id="ai-left"></span>
       </div>
-      <textarea id="ai-input" class="ai-input" maxlength="1000" rows="3"
-        placeholder="Type a question&hellip;" autocomplete="off" autocorrect="off"></textarea>
-      <div class="ai-actions row">
-        <button type="button" class="ai-btn primary" id="ai-ask">Ask</button>
-        <button type="button" class="ai-btn" id="ai-clear">Clear</button>
-        <button type="button" class="ai-btn voice" id="ai-voice"><img src="icons/mic.svg" alt=""><span id="ai-voice-label">Voice</span></button>
+      <div class="ai-top row">
+        <div class="ai-compose col grow">
+          <textarea id="ai-input" class="ai-input grow" maxlength="1000" rows="2"
+            placeholder="Type a question&hellip;" autocomplete="off" autocorrect="off"></textarea>
+          <div class="ai-actions row">
+            <button type="button" class="ai-btn primary" id="ai-ask">Ask</button>
+            <button type="button" class="ai-btn" id="ai-clear">Clear</button>
+            <span class="ai-status grow" id="ai-status"></span>
+            <span class="ai-chars" id="ai-chars">0/1000</span>
+          </div>
+        </div>
+        <button type="button" class="ai-voice" id="ai-voice"><img src="icons/mic.svg" alt=""><span id="ai-voice-label">Voice</span></button>
         <input type="file" id="ai-voice-file" class="offscreen" accept="audio/*" tabindex="-1">
-        <span class="ai-status grow" id="ai-status"></span>
-        <span class="ai-chars" id="ai-chars">0/1000</span>
       </div>
-      <div class="ai-answer grow muted" id="ai-answer">Answers appear here.</div>
+      <div class="ai-bottom row grow">
+        <div class="ai-answer grow muted" id="ai-answer"><div class="ai-answer-view" id="ai-answer-view"><div class="ai-answer-text" id="ai-answer-text">Answers appear here.</div></div></div>
+        <div class="ai-pager col is-hidden" id="ai-pager">
+          <button type="button" class="ai-page-btn grow" id="ai-prev">&#9650; Back</button>
+          <span class="ai-page-num" id="ai-page-num">1 / 1</span>
+          <button type="button" class="ai-page-btn grow" id="ai-next">Next &#9660;</button>
+        </div>
+      </div>
     </section>
 
     <div class="toast is-hidden" id="toast"></div>
@@ -158,6 +156,34 @@
     </div>
 
   </main>
+
+  <div class="overlay col is-hidden" id="jump">
+    <div class="overlay-head row">
+      <strong class="grow">Go to</strong>
+      <button type="button" class="overlay-close" id="btn-jump-close">Close</button>
+    </div>
+    <div class="jump-row row grow">
+      <button type="button" class="jump-tile grow" data-view="weather"><img src="icons/partly.svg" alt="">Weather</button>
+      <button type="button" class="jump-tile grow" data-view="maps"><img src="icons/map.svg" alt="">Maps</button>
+      <button type="button" class="jump-tile grow" data-view="cameras"><img src="icons/camera.svg" alt="">Cameras</button>
+    </div>
+    <div class="jump-row row grow">
+      <button type="button" class="jump-tile grow" data-view="calendar"><img src="icons/calendar.svg" alt="">Calendar</button>
+      <button type="button" class="jump-tile grow" data-view="assistant"><img src="icons/assistant.svg" alt="">Ask</button>
+    </div>
+  </div>
+
+  <div class="overlay col is-hidden" id="more">
+    <div class="overlay-head row">
+      <strong class="grow">More</strong>
+      <button type="button" class="overlay-close" id="btn-more-close">Close</button>
+    </div>
+    <div class="jump-row row grow">
+      <button type="button" class="jump-tile grow" id="btn-hours">24h</button>
+      <button type="button" class="jump-tile grow" id="btn-diag">Info</button>
+      <button type="button" class="jump-tile grow" id="btn-fullscreen">Fullscreen</button>
+    </div>
+  </div>
 </div>
 <noscript><div class="noscript">JavaScript is required for the dashboard.</div></noscript>
 <script src="app.js"></script>

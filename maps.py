@@ -20,6 +20,8 @@ import urllib.request
 
 from PIL import Image, ImageDraw, ImageEnhance
 
+import netsim
+
 log = logging.getLogger("dashboard.maps")
 
 KEY_ENV = "OPENWEATHER_API_KEY"
@@ -180,6 +182,7 @@ class MapService:
         self._failures = 0
         self._calls = 0
         self._stop = threading.Event()
+        self._wake = threading.Event()
         self._thread = None
         self._limiter = RateLimiter(mcfg["max_calls_per_minute"])
         self._load_existing()
@@ -221,6 +224,8 @@ class MapService:
 
     # --- network -----------------------------------------------------------
     def _get(self, url, user_agent):
+        if netsim.blocked("maps"):
+            raise FetchError("network error: offline test")
         req = urllib.request.Request(url, headers={"User-Agent": user_agent, "Accept": "image/png"})
         limit = self.cfg["max_tile_bytes"]
         try:
@@ -413,8 +418,24 @@ class MapService:
     def _run(self):
         while not self._stop.is_set():
             self.refresh_once()
-            if self._stop.wait(self.next_delay()):
-                break
+            self._wake.wait(self.next_delay())
+            self._wake.clear()
+
+    def wake(self):
+        """Refresh now (admin page)."""
+        self._wake.set()
+
+    def clear_cache(self):
+        """Delete the rendered layer images (base-map tiles are kept), then refresh."""
+        with self._lock:
+            self._layers = {}
+        for layer in self.cfg["layers"]:
+            for small in (False, True):
+                try:
+                    os.remove(self._png_path(layer, small))
+                except OSError:
+                    pass
+        self.wake()
 
     def start(self):
         if not self.configured:
@@ -425,3 +446,4 @@ class MapService:
 
     def stop(self):
         self._stop.set()
+        self._wake.set()

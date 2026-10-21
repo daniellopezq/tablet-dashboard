@@ -16,6 +16,12 @@ tablet (800 × 400, Chrome 50), so it runs on hardware most modern web apps can'
 - **Ask:** type or speak a question and get a short AI answer. Voice uses one tap and stops on its own when you stop talking.
 - **Built for always-on use:** fullscreen mode, a diagnostics panel, usage limits so free API tiers aren't exceeded, and
   old data stays on screen when a service is down.
+- **Local fallback:** when the internet is down, small models on the server (llama.cpp and whisper.cpp) answer Ask and Voice
+  instead, and the page labels those answers.
+- **Admin page:** a password-protected, LAN-only page for API keys, AI models (cloud and local), Google sign-in, health checks
+  and optional Uptime Kuma monitors, settings, logs and an offline test switch for trying the fallbacks.
+- **Touch-friendly:** big Back/Next buttons to move between sections, and long answers paged with big buttons, for poor
+  touchscreens.
 - **Cameras:** placeholder tab for now.
 
 ## Why it's useful
@@ -36,8 +42,10 @@ tablet (800 × 400, Chrome 50), so it runs on hardware most modern web apps can'
 | Calendar | Google Calendar API (read-only OAuth with PKCE) |
 | AI assistant | [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) (default model: Gemini 2.5 Flash-Lite) |
 | Speech to text | [Groq](https://groq.com/) Whisper large-v3-turbo, with ffmpeg for audio conversion |
+| Local fallback (optional) | [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` (default Qwen3.5-2B Q4_K_M) and [whisper.cpp](https://github.com/ggml-org/whisper.cpp) `whisper-server` (base), loopback only |
+| Uptime (optional) | Built-in TCP/HTTP checks; [Uptime Kuma](https://github.com/louislam/uptime-kuma) status page or `/metrics` |
 | HTTPS | OpenSSL private CA, for microphone access on the LAN |
-| Tests | `unittest` with mock servers for every upstream service (107 tests) |
+| Tests | `unittest` with mock servers for every upstream service (183 tests) |
 
 ## Quick start
 
@@ -60,22 +68,33 @@ Optional features need extra setup and stay disabled or show a "not set up" mess
 | Calendar | A Google OAuth client and a one-time sign-in (see below) |
 | Ask tab | `AI_GATEWAY_API_KEY` (Vercel AI Gateway) in `.env` |
 | Voice input | `GROQ_API_KEY` in `.env`, `ffmpeg`, and https for one-tap recording |
+| Admin page | https, and a password set with `scripts/set-admin-password.sh` |
+| Local fallback | llama.cpp and whisper.cpp builds plus model files in a `local-ai/` folder next to this project (see "Local fallback") |
+| Uptime Kuma | A Kuma instance; `base_url` plus a status page slug, or `KUMA_API` in `.env` |
 
 ## Layout
 
 | Path | Purpose |
 |---|---|
 | `server.py` | HTTP(S) server: static files, `/api/*`, `/media/*`, background weather fetcher |
-| `assistant.py` | AI assistant: key loading, usage limits, Vercel AI Gateway call |
-| `voice.py` | Voice input: upload checks, ffmpeg conversion, Groq Whisper transcription |
+| `assistant.py` | AI assistant: key loading, usage limits, Vercel AI Gateway call, local fallback for Ask |
+| `voice.py` | Voice input: upload checks, ffmpeg conversion, Groq Whisper transcription, local fallback for Voice |
+| `fallback.py` | Local-fallback mechanism shared by Ask and Voice: header deadline, cooldown gate, local lock, plain-text cleaner |
 | `maps.py` | Weather maps: OpenWeatherMap and OpenStreetMap tiles, rate limiting, Pillow compositing |
 | `gcal.py` | Google Calendar: background fetcher, plus the `auth`, `status`, `test` and `revoke` commands |
+| `admin.py` | Admin page backend: password sign-in, API keys, Calendar sign-in, settings, AI models, offline test, logs, maintenance |
+| `health.py` | Health checks and the optional Uptime Kuma client (status page, `/metrics`, push heartbeat) |
+| `localai.py` | Local model inventory, choice (`local_ai` in config) and start/stop for the admin page |
+| `netsim.py` | Offline test switch (simulated internet outage inside the dashboard only) |
+| `envfile.py` | Owner-only file helpers for `.env` and other private files |
 | `config.example.json` | Example settings; copy to `config.json` (gitignored) |
 | `.env` | **Private** API keys (mode 600; never served, gitignored) |
 | `web/` | The only directory served as static files |
 | `media/` | Optional; the only directory served under `/media/` (mp4, m4v, webm) |
 | `data/`, `logs/`, `run/` | Runtime state, log and PID file (created automatically, gitignored) |
-| `scripts/` | `start.sh`, `stop.sh`, `make-cert.sh`, `set-assistant-key.sh` |
+| `scripts/` | `start.sh`, `stop.sh`, `make-cert.sh`, `set-assistant-key.sh`, `set-admin-password.sh`, `offline-test.sh`, `local-ai-start.sh`, `local-ai-stop.sh` |
+| `tools/eval_local_llm.py` | Quality and speed check for a local LLM |
+| `docs/` | System overview, admin panel reference, local fallback architecture, benchmarks and plan |
 | `tests/` | Unit tests with mock upstream servers: `python3 -m unittest discover -s tests` |
 
 ## Configuration (`config.json`)
@@ -93,6 +112,7 @@ Optional features need extra setup and stay disabled or show a "not set up" mess
 | `weather.refresh_minutes` | `15` | Minimum 5 |
 | `weather.stale_after_minutes` | `35` | Older data is marked stale |
 | `assistant.*`, `voice.*`, `maps.*`, `calendar.*` | | See the sections below |
+| `local_ai.*`, `health.*`, `kuma.*`, `admin.*` | | See "Local fallback" and "Admin page"; full tables in [docs/ADMIN-PANEL.md](docs/ADMIN-PANEL.md) |
 
 The weather location is never guessed from the timezone or IP address. Keys starting with `_` are ignored, so you can use
 them for comments. Restart after editing: `scripts/stop.sh && scripts/start.sh`.
@@ -108,6 +128,10 @@ KEY_NAME=GROQ_API_KEY scripts/set-assistant-key.sh         # voice
 KEY_NAME=OPENWEATHER_API_KEY scripts/set-assistant-key.sh  # maps
 scripts/set-assistant-key.sh --remove                      # delete a key (KEY_NAME applies here too)
 ```
+
+The admin page's **API keys** page does the same in the browser: save, replace, remove and test `AI_GATEWAY_API_KEY`,
+`GROQ_API_KEY`, `OPENWEATHER_API_KEY`, `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`, `KUMA_API` and `KUMA_PUSH_URL`. It never
+shows a stored value, only the last 4 characters, and changes apply without a restart.
 
 The server refuses to use a `.env` that is group- or world-readable, a symlink, or owned by another user. Environment
 variables with the same names take priority over the file.
@@ -125,8 +149,9 @@ variables with the same names take priority over the file.
 | `POST /api/transcribe`, `/api/voice/status` | Speech to text; setup state and remaining quota |
 | `/api/maps`, `/maps/<layer>.png`, `/maps/<layer>_small.png` | Map status and rendered images |
 | `/media/<file>` | Only from `media/`, with byte-range support |
+| `/admin`, `/api/admin/*` | Admin page and its JSON API: **https listener and LAN clients only** (404 otherwise). See "Admin page". |
 
-Only GET and HEAD are accepted, apart from the two POST routes. Idle connections time out after 20 s.
+Only GET and HEAD are accepted, apart from the POST routes above. Idle connections time out after 20 s.
 
 ## Client behaviour
 
@@ -135,14 +160,20 @@ Only GET and HEAD are accepted, apart from the two POST routes. Idle connections
   whenever the page becomes visible or the local clock jumps. The footer shows sync status (green, amber or red).
 - **Weather:** the server fetches Open-Meteo every 15 min and backs off after failures (1, 2, 4, 8 min). It keeps the last
   good data, which the page marks "Stale".
-- **Fullscreen** button in the rail. If the browser has no fullscreen API, the button is dimmed.
+- **Navigation:** the left rail has big **Back** / **Next** buttons that step through Weather, Maps, Cameras, Calendar and
+  Ask (wrapping around), with the current section name between them. Tapping the name opens a full-screen grid to jump to
+  any section. **More…** holds 12h/24h, Info and Fullscreen as big buttons. Taps in the first 300 ms after a panel opens
+  are ignored, for poor touchscreens.
+- **Fullscreen:** in the More panel. If the browser has no fullscreen API, the button is dimmed.
 - **Diagnostics:** the Info button shows user agent, viewport, pixel ratio, sync round-trip, clock error and more.
+- **Offline test tag:** while the admin page's offline test switch is on, a red **OFFLINE TEST** tag shows in the rail.
 - Tabs can be bookmarked directly, e.g. `http://<server-ip>:8099/#assistant`.
 
 ## AI assistant (Ask tab)
 
 Each question starts fresh: only a short system instruction and the question go to the model. There is no history, tool
-use or access to the dashboard's data. Answers are plain text.
+use or access to the dashboard's data. Answers are plain text in large type, paged instead of scrolled: when an answer
+doesn't fit, big Back and Next buttons appear beside it. The Voice button is a large target next to the question box.
 
 - **Provider:** [Vercel AI Gateway](https://vercel.com/docs/ai-gateway), OpenAI-compatible
   `POST https://ai-gateway.vercel.sh/v1/chat/completions`, default model `google/gemini-2.5-flash-lite`
@@ -197,6 +228,76 @@ Speech becomes the question text, transcribed by **Groq** `whisper-large-v3-turb
   at least 10 s of audio. `data/voice-usage.jsonl` never holds audio, transcripts or keys.
 - Transcripts that are empty, only punctuation, or likely non-speech are reported as "didn't catch any speech".
 
+## Admin page
+
+`https://<server-ip>:8443/admin`, from a PC or phone on the LAN. It's served **only on the https listener and only to LAN
+clients**; on http and from outside the LAN, `/admin` and `/api/admin/*` return 404. Internals (API, security model, config
+sections): [docs/ADMIN-PANEL.md](docs/ADMIN-PANEL.md).
+
+**First time:** on the server run `scripts/set-admin-password.sh` (at least 10 characters, typed with echo off). Only a
+scrypt hash is stored, in `data/admin.json` (mode 600). Run it again to change the password.
+
+**Sign-in:** one admin, one password. Sessions live in server memory (cookie `HttpOnly; Secure; SameSite=Strict`) and end
+after 8 h idle, 7 days at most, on sign-out, or when the server restarts. Five wrong passwords from one address lock sign-in
+for 15 minutes. Every POST must carry `X-Admin: 1`, a same-origin `Origin`/`Host` and a JSON body.
+
+| Page | What it does |
+|---|---|
+| Overview | Version, uptime, disk, memory, certificate expiry, a line per service |
+| API keys | Save, replace, remove and **test** each key. Write-only: shows "set" and the last 4 characters, never the value. Applies without a restart. |
+| AI models | Per service (Ask, Voice): cloud model (with the provider's model list), token limit, fallback on/off, no-response deadline, cooldown, local time limit, applied **live**. Local models: pick the chat and speech model files and builds (`cpu`/`vulkan`) found under `local-ai/`, threads; Start/Stop/Restart; memory and health; test buttons. Models larger than the free memory are refused. |
+| Offline test | See below. |
+| Google Calendar | Connect / Reconnect / Revoke. The final sign-in page (`http://127.0.0.1:<port>/…`) fails to load on another computer, so paste its address into the page. Shows the token's age and, while your Cloud app is in Testing, the 7-day expiry. |
+| Health & uptime | Built-in checks every 60 s (listeners, data freshness, keys, Google sign-in age, local models, disk, certificate, offline switch), TCP/HTTP checks of `health.targets` (other services on your network), and Uptime Kuma monitors. About 24 h of history per check, in memory. |
+| Settings | Form editor for the safe parts of `config.json`. The old file is copied to `backups/config-<time>.json` first and the result is validated like at start-up. Fields marked ↻ need a restart (button provided); the rest apply immediately. |
+| Logs & usage | Ask/Voice requests, local and simulated answers, cost and tokens for today and this month; tails of the server and local-model logs. |
+| Maintenance | Refresh now, rebuild maps, clear the assistant's quota pause, back up code and config to `backups/` (no `.env`, no `data/`), restart the dashboard. |
+
+### Offline test switch
+
+Makes the **dashboard process only** behave as if the internet were down, to test the local fallbacks and the stale-data
+display. Nothing else on the server loses its network; no firewall rules are touched.
+
+- Choose services: `ask`, `voice` (cloud AI calls) and optionally `weather`, `maps`, `calendar`.
+- **Realistic** mode (default): cloud AI requests hang like a black-holed connection, so the real 5 s no-response deadline,
+  the straggler guard and the 60 s cooldown-then-probe run as in an outage. **Instant** mode fails at once.
+- It always switches itself off (default 15 min, at most 120). Turning it off resets the cooldowns so the cloud is used again
+  immediately.
+- While it's on, the admin page shows a red banner, the tablet shows a red **OFFLINE TEST** tag, and usage-log entries carry
+  `"simulated": true`.
+- **Fallback test** sends one question through Ask and a sample recording through Voice and shows which side answered.
+- Terminal: `scripts/offline-test.sh on ask,voice 10` · `scripts/offline-test.sh on ask 5 instant` ·
+  `scripts/offline-test.sh off` · `scripts/offline-test.sh status`.
+
+### Uptime Kuma (optional)
+
+Show the monitors of an [Uptime Kuma](https://github.com/louislam/uptime-kuma) instance (for example, your web servers) on
+the Health page. In Settings → Uptime Kuma (or `config.json` → `kuma`), set `base_url` (e.g. `http://192.168.1.10:3001`)
+and either `status_page_slug` (a public status page; no key needed) or `use_metrics: true` with `KUMA_API` saved on the API
+keys page (reads `/metrics`: all monitors, no uptime percentages). Then turn on `enabled`. With `push_enabled` and
+`KUMA_PUSH_URL` (a Kuma *Push* monitor URL), the dashboard sends a heartbeat after every check, so Kuma can alert you when
+the dashboard itself stops.
+
+## Local fallback (offline models for Ask and Voice)
+
+When the cloud APIs don't respond, small models on the server answer instead, and the page labels those answers **Local
+fallback (small model, may be wrong)**. Details: [docs/LOCAL-FALLBACK-ARCHITECTURE.md](docs/LOCAL-FALLBACK-ARCHITECTURE.md)
+(design, configuration, operations) and [docs/LOCAL-AI-BENCHMARKS.md](docs/LOCAL-AI-BENCHMARKS.md) (measurements on a 2014
+dual-core i3 with a GTX 745).
+
+- **When it falls back:** **only** when no HTTP response headers arrive within 5 s, or the connection fails. Any HTTP status
+  (401/402/403/429/5xx) keeps the normal error, so billing and quota problems stay visible. After a no-response, that
+  service skips the cloud for 60 s, then one request probes it.
+- **Chat:** `llama-server` on 127.0.0.1:8091 (default Qwen3.5-2B Q4_K_M, CPU, 2 threads, about 2 GB RAM).
+- **Voice:** `whisper-server` on 127.0.0.1:8092 (default whisper base; Vulkan GPU if available).
+- **Setup:** build llama.cpp and whisper.cpp into `local-ai/build/llama-<cpu|vulkan>/` and `local-ai/build/whisper-<cpu|vulkan>/`,
+  and put model files in `local-ai/models/`, where `local-ai/` is next to this project (or set `LOCAL_AI_DIR`). The
+  architecture doc has the exact build commands and pinned versions.
+- **Commands:** `scripts/local-ai-start.sh` / `scripts/local-ai-stop.sh`. `scripts/start.sh` runs the start script unless
+  `NO_LOCAL_AI=1`, and the dashboard works without it. `python3 tools/eval_local_llm.py` runs a quality check.
+- **Settings:** `fallback_*`, `no_response_seconds` and `cloud_cooldown_seconds` in the `assistant` and `voice` sections; the
+  model and backend choice in `local_ai`. The admin page edits all of these.
+
 ## Weather maps (Maps tab and Weather tab card)
 
 A background thread builds map images; requests only read finished files.
@@ -238,6 +339,8 @@ Uses scope `calendar.events.readonly` with your own OAuth client.
 3. Sign in once: `python3 gcal.py auth` (optionally `--login-hint=you@example.com`). This uses a loopback redirect with PKCE.
    If your browser is on another machine, paste the final redirect URL back into the terminal.
 4. Check with `python3 gcal.py status` and `python3 gcal.py test`. Sign out with `python3 gcal.py revoke`.
+
+Steps 3 and 4 can also be done from the admin page's **Google Calendar** page.
 
 The refresh token is stored in `data/gcal-token.json` (mode 600). Settings live under `calendar`: `calendar_ids`
 (default `["primary"]`) and `days_ahead`.

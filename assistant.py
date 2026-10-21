@@ -27,6 +27,9 @@ import urllib.request
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import fallback as fb
+import netsim
+
 log = logging.getLogger("dashboard.assistant")
 
 SYSTEM_PROMPT = (
@@ -34,6 +37,15 @@ SYSTEM_PROMPT = (
     "If uncertain, say so. You have no access to live weather, calendars, cameras, or server "
     "status. Do not claim to have checked them."
 )
+# The local fallback model gets its own instruction. Small models read "you have no access to
+# live data" as a reason to refuse plain facts, drift out of the question's language, and like
+# markdown/LaTeX, which the plain-text answer box shows as raw symbols.
+LOCAL_SYSTEM_PROMPT = (
+    "Answer the user's question in one or two short sentences, in the same language as the "
+    "question. Use plain text only: no markdown, no asterisks, no LaTeX or math notation. "
+    "If you are not sure of a fact, say so briefly."
+)
+LOCAL_TEMPERATURE = 0.3  # the 2B model was most accurate at low temperature in testing
 
 KEY_ENV = "AI_GATEWAY_API_KEY"
 KEY_RE = re.compile(r"^[A-Za-z0-9._~+/=-]{8,512}$")
@@ -61,6 +73,15 @@ DEFAULT_ASSISTANT_CONFIG = {
     "allowed_hosts": [],
     "price_per_million_input_usd": None,
     "price_per_million_output_usd": None,
+    # Local fallback (llama-server on this machine). Used ONLY when the cloud sends no response
+    # headers within no_response_seconds; any HTTP status is a response and never falls back.
+    "fallback_enabled": True,
+    "fallback_base_url": "http://127.0.0.1:8091/v1",
+    "fallback_model": "qwen3.5-2b",
+    "fallback_max_output_tokens": 120,  # ~11 s at the measured 11 tok/s, inside the 25 s budget
+    "fallback_timeout_seconds": 25,
+    "no_response_seconds": 5,
+    "cloud_cooldown_seconds": 60,
 }
 
 
@@ -103,6 +124,27 @@ def validate_assistant_config(a):
     for key in ("price_per_million_input_usd", "price_per_million_output_usd"):
         if a[key] is not None and (not _num(a[key]) or a[key] < 0):
             raise ValueError("assistant.%s must be a non-negative number or null" % key)
+    validate_fallback_config(a, "assistant", (16, 4096))
+
+
+def validate_fallback_config(c, section, token_range=None):
+    """Shared checks for the local-fallback keys of the assistant and voice sections."""
+    if not isinstance(c["fallback_enabled"], bool):
+        raise ValueError("%s.fallback_enabled must be true or false" % section)
+    parts = urllib.parse.urlsplit(c["fallback_base_url"]) if isinstance(c["fallback_base_url"], str) else None
+    if not parts or parts.scheme != "http" or parts.hostname not in ("127.0.0.1", "localhost", "::1"):
+        raise ValueError("%s.fallback_base_url must be an http URL on this machine (127.0.0.1)" % section)
+    if "fallback_model" in c and (not isinstance(c["fallback_model"], str)
+                                  or not re.match(r"^[A-Za-z0-9._:/-]{1,100}$", c["fallback_model"])):
+        raise ValueError("%s.fallback_model must be a model name" % section)
+    if token_range and (not isinstance(c["fallback_max_output_tokens"], int)
+                        or isinstance(c["fallback_max_output_tokens"], bool)
+                        or not token_range[0] <= c["fallback_max_output_tokens"] <= token_range[1]):
+        raise ValueError("%s.fallback_max_output_tokens must be an integer %d-%d" % ((section,) + token_range))
+    for key, lo, hi in (("fallback_timeout_seconds", 1, 120), ("no_response_seconds", 0.1, 60),
+                        ("cloud_cooldown_seconds", 0, 3600)):
+        if not _num(c[key]) or not lo <= c[key] <= hi:
+            raise ValueError("%s.%s must be a number %s-%s" % (section, key, lo, hi))
 
 
 # --- API key -------------------------------------------------------------------------------
@@ -418,6 +460,50 @@ def _clean_token(value):
     return value if re.match(r"^[A-Za-z0-9_.-]{1,64}$", value) else ""
 
 
+def post_bounded(opener, cloud, req, timeout, limit, no_response_seconds=None):
+    """Send req and return the response body (at most `limit` bytes, within `timeout` overall).
+
+    With no_response_seconds, the request goes through `cloud` (a fallback.HeaderDeadlineOpener)
+    and raises fallback.NoResponse when no headers arrive in time; that is the only fallback
+    trigger. Every other failure raises UpstreamError, including any received HTTP status
+    (classified by status) and any failure after the headers arrived.
+    """
+    deadline = time.monotonic() + timeout
+    if no_response_seconds is None and cloud is not None and netsim.blocked(cloud.service):
+        raise UpstreamError("network_error")  # offline test with the fallback turned off
+    try:
+        if no_response_seconds is None:
+            resp = opener.open(req, timeout=timeout)
+        else:
+            resp = cloud.open(req, min(no_response_seconds, timeout), timeout)
+        with resp:
+            length = resp.headers.get("Content-Length")
+            if length and length.isdigit() and int(length) > limit:
+                raise UpstreamError("bad_response", resp.status)
+            chunks, total = [], 0
+            while True:
+                chunk = resp.read(16384)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > limit:
+                    raise UpstreamError("bad_response", resp.status)
+                if time.monotonic() > deadline:
+                    raise UpstreamError("timeout")
+                chunks.append(chunk)
+    except urllib.error.HTTPError as exc:
+        raise Assistant._classify_http_error(exc)
+    except (UpstreamError, fb.NoResponse):
+        raise
+    except (TimeoutError, OSError) as exc:
+        if isinstance(exc, TimeoutError) or "timed out" in str(exc):
+            raise UpstreamError("timeout")
+        raise UpstreamError("network_error")
+    except Exception:
+        raise UpstreamError("network_error")
+    return b"".join(chunks)
+
+
 class Assistant:
     def __init__(self, cfg, tz, base_dir, clock=now_ms):
         self.cfg = cfg
@@ -427,6 +513,8 @@ class Assistant:
                                 os.path.join(base_dir, cfg["usage_log"]), tz, clock)
         self._inflight = threading.Lock()
         self._opener = urllib.request.build_opener(_NoRedirect)
+        self._cloud = fb.HeaderDeadlineOpener(self._opener, "ask")
+        self.gate = fb.CloudGate(cfg["cloud_cooldown_seconds"])
         self._warned = set()
 
     @property
@@ -434,6 +522,11 @@ class Assistant:
         c = self.cfg
         return {"min_interval_seconds": c["min_interval_seconds"],
                 "max_per_hour": c["max_per_hour"], "max_per_day": c["max_per_day"]}
+
+    def apply_settings(self, values):
+        """Live settings change from the admin page (already validated with the full config)."""
+        self.cfg.update(values)
+        self.gate.cooldown = self.cfg["cloud_cooldown_seconds"]
 
     # -- status ---------------------------------------------------------------------------
     def _key_problem(self):
@@ -449,7 +542,8 @@ class Assistant:
                "setup_problem": problem, "model": self.cfg["model"],
                "max_question_chars": self.cfg["max_question_chars"],
                "min_interval_seconds": self.cfg["min_interval_seconds"],
-               "limits": {"per_hour": self.cfg["max_per_hour"], "per_day": self.cfg["max_per_day"]}}
+               "limits": {"per_hour": self.cfg["max_per_hour"], "per_day": self.cfg["max_per_day"]},
+               "fallback": {"enabled": self.cfg["fallback_enabled"], "cloud_cooling_down": self.gate.cooling_down()}}
         try:
             out.update(self.store.snapshot(self.limits))
         except (OSError, ValueError, TypeError):
@@ -483,9 +577,21 @@ class Assistant:
             if not allowed:
                 return self._err(info["status"], info["code"], info["message"], info["retry_after"])
             remaining = info["remaining"]
-            entry = {"ts_ms": started, "model": self.cfg["model"]}
+            entry = {"ts_ms": started, "model": self.cfg["model"], "source": "api"}
+            if netsim.blocked("ask"):
+                entry["simulated"] = True
+            use_fallback = self.cfg["fallback_enabled"]
+            skipped = use_fallback and not self.gate.begin()
+            if skipped:
+                return self._answer_locally(question, entry, started, remaining, skipped=True)
+            responded = True
+            t0 = time.monotonic()
             try:
                 result = self._call_upstream(key, question)
+            except fb.NoResponse:
+                responded = False
+                entry["api_wait_ms"] = int((time.monotonic() - t0) * 1000)
+                return self._answer_locally(question, entry, started, remaining, skipped=False)
             except UpstreamError as exc:
                 entry.update({"outcome": exc.category, "http_status": exc.http_status,
                               "duration_ms": self.clock() - started})
@@ -496,13 +602,52 @@ class Assistant:
                 entry.update({"outcome": "internal_error", "duration_ms": self.clock() - started})
                 self._log_outcome(entry)
                 return self._err(500, "internal_error", "Something went wrong answering that.")
+            finally:
+                if use_fallback:
+                    self.gate.finish(responded)
             entry.update({"outcome": "success", "http_status": 200, "duration_ms": self.clock() - started})
             entry.update(self._usage_fields(result["usage"]))
             self._log_outcome(entry)
             return 200, {"ok": True, "answer": result["answer"], "truncated": result["truncated"],
-                         "remaining": remaining}
+                         "remaining": remaining, "source": "api"}
         finally:
             self._inflight.release()
+
+    def _answer_locally(self, question, entry, started, remaining, skipped):
+        """Answer with the local model after a cloud no-response (or during the cooldown)."""
+        entry.update({"source": "local", "model": self.cfg["fallback_model"],
+                      "cloud": "skipped" if skipped else "no_response"})
+        t0 = time.monotonic()
+        deadline = t0 + self.cfg["fallback_timeout_seconds"]
+        result, failure = None, None
+        if not fb.acquire_local(deadline):
+            failure = "local_busy"
+        else:
+            try:
+                result = self._call_local(question, deadline)
+            except UpstreamError as exc:
+                failure = exc.category
+            except Exception:  # defensive, as for the cloud call
+                log.error("assistant: unexpected local fallback failure (details withheld)")
+                failure = "internal_error"
+            finally:
+                fb.LOCAL_LOCK.release()
+        entry.update({"local_ms": int((time.monotonic() - t0) * 1000), "duration_ms": self.clock() - started})
+        if failure is not None:
+            entry.update({"outcome": "local_error", "local_error": failure})
+            self._log_outcome(entry)
+            if skipped:
+                return self._err(503, "local_unavailable",
+                                 "Using the local fallback (the AI service was unreachable a moment ago), "
+                                 "but it is unavailable right now. Try again shortly.")
+            return self._err(503, "local_unavailable",
+                             "The AI service didn't respond and the local fallback is unavailable.")
+        entry.update({"outcome": "success_local", "http_status": 200})
+        entry.update(self._usage_fields(result["usage"]))
+        entry.update({"reported_cost_usd": None, "estimated_cost_usd": None})
+        self._log_outcome(entry)
+        return 200, {"ok": True, "answer": result["answer"], "truncated": result["truncated"],
+                     "remaining": remaining, "source": "local"}
 
     def _log_outcome(self, entry):
         try:
@@ -566,41 +711,36 @@ class Assistant:
         return payload
 
     def _call_upstream(self, key, question):
-        limit = self.cfg["max_response_bytes"]
-        timeout = self.cfg["timeout_seconds"]
-        deadline = time.monotonic() + timeout
         body = json.dumps(self._build_payload(question)).encode("utf-8")
         req = urllib.request.Request(
             self.cfg["base_url"].rstrip("/") + "/chat/completions", data=body, method="POST",
             headers={"Authorization": "Bearer " + key, "Content-Type": "application/json",
                      "Accept": "application/json", "User-Agent": "TabletDashboard-assistant"})
-        try:
-            with self._opener.open(req, timeout=timeout) as resp:
-                length = resp.headers.get("Content-Length")
-                if length and length.isdigit() and int(length) > limit:
-                    raise UpstreamError("bad_response", resp.status)
-                chunks, total = [], 0
-                while True:
-                    chunk = resp.read(16384)
-                    if not chunk:
-                        break
-                    total += len(chunk)
-                    if total > limit:
-                        raise UpstreamError("bad_response", resp.status)
-                    if time.monotonic() > deadline:
-                        raise UpstreamError("timeout")
-                    chunks.append(chunk)
-        except urllib.error.HTTPError as exc:
-            raise self._classify_http_error(exc)
-        except UpstreamError:
-            raise
-        except (TimeoutError, OSError) as exc:
-            if isinstance(exc, TimeoutError) or "timed out" in str(exc):
-                raise UpstreamError("timeout")
-            raise UpstreamError("network_error")
-        except Exception:
-            raise UpstreamError("network_error")
-        return self._parse_success(b"".join(chunks))
+        no_response = self.cfg["no_response_seconds"] if self.cfg["fallback_enabled"] else None
+        return self._parse_success(post_bounded(self._opener, self._cloud, req, self.cfg["timeout_seconds"],
+                                                self.cfg["max_response_bytes"], no_response))
+
+    def _call_local(self, question, deadline):
+        payload = {
+            "model": self.cfg["fallback_model"],
+            "messages": [{"role": "system", "content": LOCAL_SYSTEM_PROMPT},
+                         {"role": "user", "content": question}],
+            "max_tokens": self.cfg["fallback_max_output_tokens"],
+            "stream": False,
+            "temperature": LOCAL_TEMPERATURE,
+            "chat_template_kwargs": {"enable_thinking": False},  # Qwen: answer directly
+        }
+        req = urllib.request.Request(
+            self.cfg["fallback_base_url"].rstrip("/") + "/chat/completions",
+            data=json.dumps(payload).encode("utf-8"), method="POST",
+            headers={"Content-Type": "application/json", "Accept": "application/json",
+                     "User-Agent": "TabletDashboard-assistant"})
+        timeout = max(0.1, deadline - time.monotonic())
+        result = self._parse_success(post_bounded(self._opener, None, req, timeout, self.cfg["max_response_bytes"]))
+        result["answer"] = fb.plain_text(result["answer"])
+        if not result["answer"]:
+            raise UpstreamError("empty_answer", 200)
+        return result
 
     @staticmethod
     def _classify_http_error(exc):

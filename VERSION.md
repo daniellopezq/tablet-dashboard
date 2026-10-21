@@ -11,6 +11,144 @@ that period.
 
 ---
 
+Versions 0.7.0 to 0.10.0 were developed on the author's own server and published together in this release.
+
+## 0.10.0 (2026-10-20): Back/Next navigation for the touchscreen
+
+**Changed**
+- The left rail's five small section buttons (56 px tall with 6 px gaps) often caught the wrong tap on the tablet's
+  poor touchscreen. The rail is now 150 px wide (was 112) and has two large **Back** / **Next** buttons (about 133x97
+  at 800x400) that wrap around, with the current section (icon, name, "n / 5") between them, separated by 12 px dead zones.
+- Tapping the current section name opens a full-screen **Go to** grid with five large tiles for a direct jump.
+- 24h / Info / Fullscreen moved behind one **More…** button that opens a panel with three large buttons. The
+  element ids are unchanged, so the existing handlers work as before.
+- Taps on a panel in the first 300 ms after it opens are ignored, so a bounce can't pick a tile by accident.
+- Small-viewport CSS: a 110 px rail with the same layout.
+
+**Verified:** headless Chromium over CDP at 800x400 and 533x267. Back wraps from Weather to Ask, Next steps, the grid
+jump works, a tap within 300 ms is ignored, 24h toggles, Info opens Diagnostics, the rail doesn't overflow, and there are
+no JS errors. 183 tests OK. Not yet tried on the tablet.
+
+## 0.9.2 (2026-10-19): Uptime Kuma key name
+
+**Changed**
+- The Kuma API key is named `KUMA_API` in `.env`. The older `KUMA_API_KEY` is still accepted as an alias, in both
+  `health.py` and the admin page's API keys row.
+- Tested against a real Kuma instance through `/metrics` (http and keyword monitors).
+
+## 0.9.1 (2026-10-19): Reference docs brought up to date
+
+Documentation only; no code change apart from the version number.
+
+**Changed**
+- `docs/SYSTEM-OVERVIEW.md`:
+  - adds the admin page to the features table and the architecture diagram, and covers its state files and access rules
+  - adds new constraint rows for testing fallbacks safely and for health monitoring
+  - updates the status to 0.9.0 and its open items
+- `docs/LOCAL-FALLBACK-ARCHITECTURE.md`:
+  - status is now live
+  - documents the `local_ai` config section and how the start script reads it
+  - adds a section on the offline test switch (Realistic vs Instant modes, auto-expiry, gate reset, labelling)
+  - adds the admin page and `offline-test.sh` to Operations, and marks "enable in production" done
+- `docs/LOCAL-FALLBACK-PLAN.md`: the status header says it is live.
+- `README.md`: links the system overview, version history and admin URL; the local-fallback summary mentions the
+  `local_ai` section and the offline test switch. Links the new admin reference.
+- `docs/LOCAL-AI-BENCHMARKS.md`: adds the live offline-switch round trip (Ask 6.67 s, Voice 9.55 s; 5.00 s simulated
+  wait each).
+- `docs/LOCAL-FALLBACK-ARCHITECTURE.md` pitfalls: the intermittent `BrokenPipeError` in
+  `test_voice.test_rejected_input_uses_no_quota` is a known flaky test that predates 0.9.0.
+
+**Added**
+- `docs/ADMIN-PANEL.md`: reference for the admin internals (modules, security model, `/api/admin/*` routes and jobs,
+  the `admin`/`health`/`kuma` config sections, config saving and restart, health checks, tests, open work).
+
+**Verified:** 182 tests pass at 0.9.0; the admin password is set (`data/admin.json`, mode 600), and `/admin` returns 404
+on http 8099.
+
+
+## 0.9.0 (2026-10-19): Admin page, offline test switch, health checks
+
+A password-protected admin page (`https://<server>:8443/admin`, LAN only) replaces most shell-only maintenance.
+
+**Added**
+- `admin.py` + `web/admin.{html,js,css}`: single-admin sign-in (scrypt hash in `data/admin.json`, set with
+  `scripts/set-admin-password.sh`), in-memory sessions with `HttpOnly; Secure; SameSite=Strict` cookies, 5-failure lockout,
+  `X-Admin` + same-origin check on every POST. Served only on the https listener and only to LAN clients.
+- **API keys page**: save, replace, remove and test the Gateway, Groq, OpenWeatherMap, Google OAuth and Uptime Kuma
+  secrets. Write-only (shows the last 4 characters); applies without a restart; also accepts the alias `GROQ`.
+- **AI models page**: cloud model per service (with the provider's model list), token limit, fallback deadline/cooldown/
+  time limit, applied live; local chat/speech model and build picker from `local-ai/` (memory guard), start/stop/restart,
+  health and memory per server; direct cloud and local test buttons. `localai.py`; new `local_ai` config section, read by
+  `scripts/local-ai-start.sh` (environment variables still win).
+- **Offline test switch** (`netsim.py`, `scripts/offline-test.sh`): simulates an internet outage inside the dashboard only,
+  for Ask, Voice, Weather, Maps and/or Calendar. Realistic mode exercises the real no-response deadline, straggler guard and
+  cooldown; instant mode fails at once. Always auto-expires (≤ 120 min), resets the cooldowns when turned off, marks usage
+  entries `simulated`, and shows a red OFFLINE TEST tag on the tablet. A one-click fallback test reports which side answered.
+- **Google Calendar page**: connect / reconnect / revoke in the browser (paste-the-redirect flow), token age and the 7-day
+  Testing-mode expiry.
+- **Health & uptime** (`health.py`): checks every 60 s of the listeners, data freshness, keys, Google sign-in age, local
+  models, disk, certificate and the offline switch, plus TCP/HTTP targets (other services on your network) and
+  optional Uptime Kuma monitors (status page or `/metrics`) with a push heartbeat. ~24 h history per check.
+- **Settings** editor for the safe parts of `config.json` (validated like at start-up, previous file backed up), **Logs &
+  usage** (cost, tokens, local and simulated answers today/this month), **Maintenance** (refresh, rebuild maps, clear the
+  quota pause, backup, restart).
+- `envfile.py` (shared private-file helpers); `/api/config` reports `offline_test`.
+- 52 new tests (`test_admin.py`, `test_netsim.py`, `test_health.py`).
+
+**Changed**
+- Weather, maps and calendar background threads can be woken for an immediate refresh.
+- `gcal.py revoke` logic is shared with the admin page.
+
+## 0.8.0 (2026-10-16): Touch-friendly Ask tab
+
+The tablet's touchscreen often misses small targets and drags, so the Ask tab now uses big targets and avoids scrolling.
+
+**Changed**
+- Voice is a large green button (150 × 124 px, about 3× the old size) to the right of the question box, spanning the box and
+  the Ask/Clear row. It turns red and reads "Stop" while listening, as before. Ask and Clear are 48 px tall.
+- Answers use larger type (27 px, was 20 px) and are **paged instead of scrolled**. The text area is cut to whole lines, and
+  when an answer does not fit, big bold **▲ Back** / **Next ▼** buttons and a page counter appear beside it. Pages are
+  recalculated when the screen size changes (e.g. entering fullscreen). The smaller-viewport layout scales the same way.
+
+**Fixed**
+- The status line wraps to two lines, so "Local fallback (small model, may be wrong)" is no longer cut off next to
+  Ask/Clear. On small viewports the character counter is hidden to make room (the 1,000-character limit still applies).
+
+Verified in headless Chromium at 800 × 400 and 533 × 267, not yet on the tablet.
+
+
+## 0.7.0 (2026-10-16): Local AI fallback on legacy hardware
+
+Ask and Voice keep working when the internet or the cloud APIs are unreachable, using small models on the same 2014-era
+server (i3-4150, GTX 745). Design: `docs/LOCAL-FALLBACK-ARCHITECTURE.md`; measurements: `docs/LOCAL-AI-BENCHMARKS.md`.
+
+**Added**
+- Local fallback, used **only** when the cloud sends no response headers within 5 s or the connection fails. Any HTTP
+  status (401/402/403/429/5xx) still shows the normal error. After a no-response, each service skips the cloud for 60 s,
+  then lets one request probe it.
+- `fallback.py`: the header deadline (a worker thread, so DNS is bounded too), the per-service cooldown gate, one shared
+  local-inference lock, and a markdown/LaTeX-to-plain-text cleaner for local answers.
+- Chat fallback: Qwen3.5-2B (Q4_K_M) through llama.cpp's `llama-server` on the CPU, with its own short plain-text prompt.
+- Voice fallback: whisper.cpp `base` through `whisper-server` on the GPU via Vulkan (≈ 2.5× faster than the CPU here).
+- `scripts/local-ai-start.sh` / `local-ai-stop.sh` (loopback only, low priority, warm-up, prompt cache capped);
+  `scripts/start.sh` starts them unless `NO_LOCAL_AI=1`.
+- `tools/eval_local_llm.py`: a repeatable quality and speed check for candidate models.
+- Responses and usage logs carry `source` (`api` / `local`) and phase timings; the status endpoints report the fallback state.
+- Config keys in `assistant` and `voice`: `fallback_enabled`, `fallback_base_url` (loopback only), `fallback_model`,
+  `fallback_timeout_seconds`, `no_response_seconds`, `cloud_cooldown_seconds`, plus `fallback_max_output_tokens` (Ask)
+  and `total_timeout_seconds` (Voice).
+- 23 new tests (black-hole server, refused connections, stalled bodies, cooldown and probe, budgets, output cleaning).
+
+**Changed**
+- Cloud calls now give up waiting for the *first response* after 5 s when the fallback is enabled (the overall 30 s limit
+  for a slow but answering cloud is unchanged).
+- The page shows "Local fallback (small model, may be wrong)" for local answers and "(local fallback)" for local transcripts.
+- A whole voice request is capped at 45 s on the server, leaving a margin under the page's 60 s limit.
+
+**Measured** (cloud unreachable): Ask ≈ 8 s for the first question (5 s of it is the no-response deadline), then ≈ 1.8 s;
+Voice ≈ 12 s first, then ≈ 3.3 s.
+
+
 ## 0.6.0 (2026-10-15): First public release
 
 **Changed**

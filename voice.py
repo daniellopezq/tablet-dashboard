@@ -23,6 +23,8 @@ import urllib.request
 import uuid
 
 import assistant as am
+import fallback as fb
+import netsim
 
 log = logging.getLogger("dashboard.voice")
 
@@ -53,6 +55,17 @@ DEFAULT_VOICE_CONFIG = {
     "max_response_bytes": 262144,
     "no_speech_threshold": 0.6,
     "price_per_hour_usd": 0.04,
+    # Whole request (conversion + cloud or local transcription) is capped server-side, leaving a
+    # margin under the page's 60 s VOICE_TIMEOUT_MS.
+    "total_timeout_seconds": 45,
+    # Local fallback (whisper-server on this machine). Used ONLY when the cloud sends no response
+    # headers within no_response_seconds; any HTTP status is a response and never falls back.
+    "fallback_enabled": True,
+    "fallback_base_url": "http://127.0.0.1:8092",
+    "fallback_model": "whisper-base",
+    "fallback_timeout_seconds": 20,
+    "no_response_seconds": 5,
+    "cloud_cooldown_seconds": 60,
 }
 
 
@@ -84,6 +97,9 @@ def validate_voice_config(v):
             raise ValueError("voice.%s must be a number %s-%s" % (key, lo, hi))
     if v["price_per_hour_usd"] is not None and (not am._num(v["price_per_hour_usd"]) or v["price_per_hour_usd"] < 0):
         raise ValueError("voice.price_per_hour_usd must be a non-negative number or null")
+    if not am._num(v["total_timeout_seconds"]) or not 5 <= v["total_timeout_seconds"] <= 300:
+        raise ValueError("voice.total_timeout_seconds must be a number 5-300")
+    am.validate_fallback_config(v, "voice")
 
 
 def sniff_audio(data):
@@ -196,7 +212,14 @@ class Transcriber:
                                    os.path.join(base_dir, cfg["usage_log"]), tz, clock)
         self._inflight = threading.Lock()
         self._opener = urllib.request.build_opener(am._NoRedirect)
+        self._cloud = fb.HeaderDeadlineOpener(self._opener, "voice")
+        self.gate = fb.CloudGate(cfg["cloud_cooldown_seconds"])
         self._warned = set()
+
+    def apply_settings(self, values):
+        """Live settings change from the admin page (already validated with the full config)."""
+        self.cfg.update(values)
+        self.gate.cooldown = self.cfg["cloud_cooldown_seconds"]
 
     @property
     def limits(self):
@@ -217,7 +240,8 @@ class Transcriber:
                "configured": key is not None, "setup_problem": problem,
                "model": self.cfg["model"], "max_audio_seconds": self.cfg["max_audio_seconds"],
                "max_upload_bytes": self.cfg["max_upload_bytes"],
-               "limits": {"per_hour": self.cfg["max_per_hour"], "per_day": self.cfg["max_per_day"]}}
+               "limits": {"per_hour": self.cfg["max_per_hour"], "per_day": self.cfg["max_per_day"]},
+               "fallback": {"enabled": self.cfg["fallback_enabled"], "cloud_cooling_down": self.gate.cooling_down()}}
         try:
             out["remaining"] = self.store.snapshot(self.limits)["remaining"]
         except (OSError, ValueError, TypeError):
@@ -242,6 +266,8 @@ class Transcriber:
         if not self._inflight.acquire(False):
             return self._err(429, "busy", "Another recording is still being processed. Try again in a few seconds.", 5)
         started = self.clock()
+        t_start = time.monotonic()
+        request_deadline = t_start + self.cfg["total_timeout_seconds"]
         try:
             try:
                 wav, seconds = convert_to_wav(audio, self.cfg, self.base_dir)
@@ -256,11 +282,30 @@ class Transcriber:
                 return self._err(info["status"], info["code"], info["message"], info["retry_after"])
             remaining = info["remaining"]
             entry = {"ts_ms": started, "model": self.cfg["model"], "audio_seconds": round(seconds, 2),
-                     "upload_bytes": len(audio)}
+                     "upload_bytes": len(audio), "source": "api",
+                     "convert_ms": int((time.monotonic() - t_start) * 1000)}
+            if netsim.blocked("voice"):
+                entry["simulated"] = True
             price = self.cfg["price_per_hour_usd"]
             entry["estimated_cost_usd"] = (round(max(seconds, 10.0) / 3600.0 * price, 8) if price is not None else None)
+            use_fallback = self.cfg["fallback_enabled"]
+            if use_fallback and not self.gate.begin():
+                return self._transcribe_locally(wav, entry, started, remaining, request_deadline, skipped=True)
+            remaining_s = request_deadline - time.monotonic()
+            if remaining_s < 1:
+                entry.update({"outcome": "timeout", "duration_ms": self.clock() - started})
+                if use_fallback:
+                    self.gate.finish(True)  # no cloud attempt was made; don't leave a probe pending
+                self._log_outcome(entry)
+                return self._err(504, "timeout", "Processing the recording took too long. Try again.")
+            responded = True
+            t0 = time.monotonic()
             try:
-                result = self._call_upstream(key, wav)
+                result = self._call_upstream(key, wav, min(self.cfg["timeout_seconds"], remaining_s))
+            except fb.NoResponse:
+                responded = False
+                entry["api_wait_ms"] = int((time.monotonic() - t0) * 1000)
+                return self._transcribe_locally(wav, entry, started, remaining, request_deadline, skipped=False)
             except am.UpstreamError as exc:
                 entry.update({"outcome": exc.category, "http_status": exc.http_status,
                               "duration_ms": self.clock() - started})
@@ -271,13 +316,51 @@ class Transcriber:
                 entry.update({"outcome": "internal_error", "duration_ms": self.clock() - started})
                 self._log_outcome(entry)
                 return self._err(500, "internal_error", "Something went wrong transcribing that.")
+            finally:
+                if use_fallback:
+                    self.gate.finish(responded)
             entry.update({"outcome": "no_speech" if result["no_speech"] else "success", "http_status": 200,
                           "duration_ms": self.clock() - started, "text_chars": len(result["text"])})
             self._log_outcome(entry)
             return 200, {"ok": True, "text": result["text"], "no_speech": result["no_speech"],
-                         "seconds": round(seconds, 1), "remaining": remaining}
+                         "seconds": round(seconds, 1), "remaining": remaining, "source": "api"}
         finally:
             self._inflight.release()
+
+    def _transcribe_locally(self, wav, entry, started, remaining, request_deadline, skipped):
+        """Transcribe with the local model after a cloud no-response (or during the cooldown)."""
+        entry.update({"source": "local", "model": self.cfg["fallback_model"], "estimated_cost_usd": None,
+                      "cloud": "skipped" if skipped else "no_response"})
+        t0 = time.monotonic()
+        deadline = min(t0 + self.cfg["fallback_timeout_seconds"], request_deadline)
+        result, failure = None, None
+        if not fb.acquire_local(deadline):
+            failure = "local_busy"
+        else:
+            try:
+                result = self._call_local(wav, deadline)
+            except am.UpstreamError as exc:
+                failure = exc.category
+            except Exception:  # defensive, as for the cloud call
+                log.error("voice: unexpected local fallback failure (details withheld)")
+                failure = "internal_error"
+            finally:
+                fb.LOCAL_LOCK.release()
+        entry.update({"local_ms": int((time.monotonic() - t0) * 1000), "duration_ms": self.clock() - started})
+        if failure is not None:
+            entry.update({"outcome": "local_error", "local_error": failure})
+            self._log_outcome(entry)
+            if skipped:
+                return self._err(503, "local_unavailable",
+                                 "Using the local fallback (the speech service was unreachable a moment ago), "
+                                 "but it is unavailable right now. Try again shortly.")
+            return self._err(503, "local_unavailable",
+                             "The speech service didn't respond and the local fallback is unavailable.")
+        entry.update({"outcome": "no_speech_local" if result["no_speech"] else "success_local",
+                      "http_status": 200, "text_chars": len(result["text"])})
+        self._log_outcome(entry)
+        return 200, {"ok": True, "text": result["text"], "no_speech": result["no_speech"],
+                     "seconds": round(entry["audio_seconds"], 1), "remaining": remaining, "source": "local"}
 
     def _log_outcome(self, entry):
         try:
@@ -304,10 +387,7 @@ class Transcriber:
             return self._err(413, "too_large", "That recording is too large. Keep it shorter.")
         return self._err(502, "upstream_error", "The speech service returned an error. Try again later.")
 
-    def _call_upstream(self, key, wav):
-        limit = self.cfg["max_response_bytes"]
-        timeout = self.cfg["timeout_seconds"]
-        deadline = time.monotonic() + timeout
+    def _call_upstream(self, key, wav, timeout):
         fields = [("model", self.cfg["model"]), ("response_format", "verbose_json"), ("temperature", "0")]
         if self.cfg["language"]:
             fields.append(("language", self.cfg["language"]))
@@ -316,33 +396,20 @@ class Transcriber:
             self.cfg["base_url"].rstrip("/") + "/audio/transcriptions", data=body, method="POST",
             headers={"Authorization": "Bearer " + key, "Content-Type": ctype, "Accept": "application/json",
                      "User-Agent": "TabletDashboard-voice"})
-        try:
-            with self._opener.open(req, timeout=timeout) as resp:
-                length = resp.headers.get("Content-Length")
-                if length and length.isdigit() and int(length) > limit:
-                    raise am.UpstreamError("bad_response", resp.status)
-                chunks, total = [], 0
-                while True:
-                    chunk = resp.read(16384)
-                    if not chunk:
-                        break
-                    total += len(chunk)
-                    if total > limit:
-                        raise am.UpstreamError("bad_response", resp.status)
-                    if time.monotonic() > deadline:
-                        raise am.UpstreamError("timeout")
-                    chunks.append(chunk)
-        except urllib.error.HTTPError as exc:
-            raise am.Assistant._classify_http_error(exc)
-        except am.UpstreamError:
-            raise
-        except (TimeoutError, OSError) as exc:
-            if isinstance(exc, TimeoutError) or "timed out" in str(exc):
-                raise am.UpstreamError("timeout")
-            raise am.UpstreamError("network_error")
-        except Exception:
-            raise am.UpstreamError("network_error")
-        return self._parse(b"".join(chunks))
+        no_response = self.cfg["no_response_seconds"] if self.cfg["fallback_enabled"] else None
+        return self._parse(am.post_bounded(self._opener, self._cloud, req, timeout,
+                                           self.cfg["max_response_bytes"], no_response))
+
+    def _call_local(self, wav, deadline):
+        # whisper-server's own API: multipart "file" upload to /inference.
+        fields = [("response_format", "verbose_json"), ("temperature", "0"),
+                  ("language", self.cfg["language"] or "auto")]
+        body, ctype = encode_multipart(fields, "audio.wav", wav, "audio/wav")
+        req = urllib.request.Request(
+            self.cfg["fallback_base_url"].rstrip("/") + "/inference", data=body, method="POST",
+            headers={"Content-Type": ctype, "Accept": "application/json", "User-Agent": "TabletDashboard-voice"})
+        timeout = max(0.1, deadline - time.monotonic())
+        return self._parse(am.post_bounded(self._opener, None, req, timeout, self.cfg["max_response_bytes"]))
 
     def _parse(self, raw):
         try:

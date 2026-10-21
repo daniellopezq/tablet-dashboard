@@ -545,7 +545,8 @@
     'and restart the dashboard (see README).';
   var ai = {
     inFlight: false, token: 0, handle: null, blockedUntil: 0, hasAnswer: false,
-    configured: null, enabled: true, maxChars: 1000, minInterval: 10, left: null
+    configured: null, enabled: true, maxChars: 1000, minInterval: 10, left: null,
+    page: 0, pages: 1, pageStep: 0
   };
 
   // Like getJSON but also sends JSON and reports the HTTP status even for error responses.
@@ -591,10 +592,51 @@
   }
 
   function aiSetAnswer(text, cls) {
-    var el = $('ai-answer');
-    el.textContent = text;  // plain text only, never HTML
-    el.className = 'ai-answer grow' + (cls ? ' ' + cls : '');
-    el.scrollTop = 0;
+    $('ai-answer-text').textContent = text;  // plain text only, never HTML
+    $('ai-answer').className = 'ai-answer grow' + (cls ? ' ' + cls : '');
+    ai.page = 0;
+    aiPaginate();
+  }
+
+  // The answer is paged instead of scrolled (the touchscreen is poor at scrolling). The viewport is
+  // cut to whole lines, the text is padded to a whole number of pages, and Back/Next move scrollTop
+  // one page at a time. The pager only appears when the answer does not fit.
+  function aiFitView() {
+    var box = $('ai-answer');
+    var view = $('ai-answer-view');
+    var cs = window.getComputedStyle(box);
+    var avail = box.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    var lh = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.3;
+    var step = Math.max(1, Math.floor(avail / lh)) * lh;
+    view.style.height = step + 'px';
+    return step;
+  }
+
+  function aiPaginate() {
+    var box = $('ai-answer');
+    var text = $('ai-answer-text');
+    var pager = $('ai-pager');
+    if (!box.offsetHeight) { return; }  // tab not visible; redone by showView
+    text.style.paddingBottom = '0';
+    setClass(pager, 'is-hidden', true);
+    var step = aiFitView();
+    if (text.offsetHeight > step + 1) {
+      setClass(pager, 'is-hidden', false);  // narrower now, so measure again
+      step = aiFitView();
+    }
+    var h = text.offsetHeight;
+    ai.pages = Math.max(1, Math.ceil((h - 1) / step));
+    text.style.paddingBottom = (ai.pages * step - h) + 'px';
+    ai.pageStep = step;
+    aiShowPage(ai.page);
+  }
+
+  function aiShowPage(n) {
+    ai.page = Math.max(0, Math.min(n, (ai.pages || 1) - 1));
+    $('ai-answer-view').scrollTop = ai.page * (ai.pageStep || 0);
+    $('ai-prev').disabled = ai.page === 0;
+    $('ai-next').disabled = ai.page >= ai.pages - 1;
+    setText($('ai-page-num'), (ai.page + 1) + ' / ' + ai.pages);
   }
 
   // Optional href: the text after `text` becomes a tappable link to it.
@@ -680,7 +722,8 @@
         aiSetStatus('Server unreachable', 'bad');
       } else if (data && data.ok === true && typeof data.answer === 'string') {
         aiSetAnswer(data.answer + (data.truncated ? '\n\n(The answer was cut off at the length limit.)' : ''), '');
-        aiSetStatus('', '');
+        // Cloud gave no response, so a small model on the server answered: say so, it can be wrong.
+        if (data.source === 'local') { aiSetStatus('Local fallback (small model, may be wrong)', 'warn'); } else { aiSetStatus('', ''); }
         if (data.remaining) { ai.left = data.remaining; }
         ai.blockedUntil = Date.now() + ai.minInterval * 1000;
       } else {
@@ -983,11 +1026,12 @@
           aiSetStatus('Didn\'t catch any speech. Try again a little closer.', 'warn');
         } else {
           $('ai-input').value = String(data.text).slice(0, ai.maxChars);
+          var via = data.source === 'local' ? ' (local fallback)' : '';
           if (!voice.autoAsk) {
-            aiSetStatus('Check the text, then tap Ask.', '');
+            aiSetStatus('Check the text, then tap Ask.' + via, via ? 'warn' : '');
           } else if (ai.blockedUntil > Date.now()) {
             voice.askWhenReady = true;  // asked automatically when the wait ends (see tick)
-            aiSetStatus('Will ask as soon as the wait ends…', '');
+            aiSetStatus('Will ask as soon as the wait ends…' + via, via ? 'warn' : '');
           } else {
             aiRender();
             aiAsk();
@@ -1024,18 +1068,53 @@
   }
 
   // ---- views ----
+  // Rail order for Back/Next (wraps around) and the jump grid.
+  var VIEWS = [
+    { id: 'weather', label: 'Weather', icon: 'icons/partly.svg' },
+    { id: 'maps', label: 'Maps', icon: 'icons/map.svg' },
+    { id: 'cameras', label: 'Cameras', icon: 'icons/camera.svg' },
+    { id: 'calendar', label: 'Calendar', icon: 'icons/calendar.svg' },
+    { id: 'assistant', label: 'Ask', icon: 'icons/assistant.svg' }
+  ];
+  var currentView = 0;
+
   function showView(name) {
-    var buttons = document.querySelectorAll('.nav-btn');
-    for (var i = 0; i < buttons.length; i++) {
-      setClass(buttons[i], 'active', buttons[i].getAttribute('data-view') === name);
+    for (var k = 0; k < VIEWS.length; k++) {
+      if (VIEWS[k].id === name) { currentView = k; }
+    }
+    var v = VIEWS[currentView];
+    $('nav-current-icon').src = v.icon;
+    setText($('nav-current-name'), v.label);
+    setText($('nav-current-pos'), (currentView + 1) + ' / ' + VIEWS.length);
+    var tiles = document.querySelectorAll('#jump .jump-tile');
+    for (var i = 0; i < tiles.length; i++) {
+      setClass(tiles[i], 'active', tiles[i].getAttribute('data-view') === name);
     }
     var views = document.querySelectorAll('.view');
     for (var j = 0; j < views.length; j++) {
       setClass(views[j], 'active', views[j].id === 'view-' + name);
     }
-    if (name === 'assistant') { aiLoadStatus(); aiRender(); }
+    if (name === 'assistant') { aiLoadStatus(); aiRender(); aiPaginate(); }
     if (name === 'calendar') { renderCalendar(); pollCalendar(); }
     mapsSync();
+  }
+
+  function stepView(delta) {
+    showView(VIEWS[(currentView + delta + VIEWS.length) % VIEWS.length].id);
+  }
+
+  // Jump grid and More panel. Taps in the first 300 ms after opening are ignored so the
+  // finger that opened a panel (or a bounce from the poor touchscreen) can't pick a tile.
+  var overlayOpenedAt = 0;
+  function setOverlay(id, open) {
+    setClass($(id), 'is-hidden', !open);
+    if (open) { overlayOpenedAt = Date.now(); }
+  }
+  function overlayTap(fn) {
+    return function () {
+      if (Date.now() - overlayOpenedAt < 300) { return; }
+      fn.call(this);
+    };
   }
 
   // ---- maps slideshow (Maps tab) and small card (Weather tab) ----
@@ -1349,6 +1428,13 @@
         link.href = 'https://' + window.location.hostname + ':' + state.httpsPort + '/';
         setText(link, link.href);
       }
+      var tag = document.getElementById('offline-tag');
+      if (tag) {
+        var sim = data.offline_test || [];
+        setClass(tag, 'show', sim.length > 0);
+        tag.title = sim.length ? 'Simulated offline: ' + sim.join(', ') : '';
+      }
+      setTimeout(loadConfig, 60000);  // re-read once a minute (offline test switch)
       if (!state.hourPrefStored && typeof data.clock_default_24h === 'boolean') {
         state.use24h = data.clock_default_24h;
         applyHourButton();
@@ -1366,21 +1452,33 @@
     }
     applyHourButton();
 
-    var buttons = document.querySelectorAll('.nav-btn');
-    for (var i = 0; i < buttons.length; i++) {
-      buttons[i].addEventListener('click', function () { showView(this.getAttribute('data-view')); }, false);
+    $('nav-back').addEventListener('click', function () { stepView(-1); }, false);
+    $('nav-next').addEventListener('click', function () { stepView(1); }, false);
+    $('nav-current').addEventListener('click', function () { setOverlay('jump', true); }, false);
+    $('btn-jump-close').addEventListener('click', function () { setOverlay('jump', false); }, false);
+    var tiles = document.querySelectorAll('#jump .jump-tile');
+    for (var i = 0; i < tiles.length; i++) {
+      tiles[i].addEventListener('click', overlayTap(function () {
+        setOverlay('jump', false);
+        showView(this.getAttribute('data-view'));
+      }), false);
     }
-    $('btn-hours').addEventListener('click', toggleHours, false);
+    $('btn-more').addEventListener('click', function () { setOverlay('more', true); }, false);
+    $('btn-more-close').addEventListener('click', function () { setOverlay('more', false); }, false);
+    $('btn-hours').addEventListener('click', overlayTap(toggleHours), false);
     $('ai-ask').addEventListener('click', aiAsk, false);
     $('ai-clear').addEventListener('click', aiClear, false);
     $('ai-voice').addEventListener('click', voiceClick, false);
     $('ai-voice-file').addEventListener('change', voiceFileChosen, false);
+    $('ai-prev').addEventListener('click', function () { aiShowPage(ai.page - 1); }, false);
+    $('ai-next').addEventListener('click', function () { aiShowPage(ai.page + 1); }, false);
+    window.addEventListener('resize', aiPaginate, false);
     $('ai-input').addEventListener('input', aiRender, false);
     $('ai-input').addEventListener('keyup', aiRender, false);
     aiRender();
-    $('btn-diag').addEventListener('click', function () { setDiag(!state.diagOpen); }, false);
+    $('btn-diag').addEventListener('click', overlayTap(function () { setOverlay('more', false); setDiag(true); }), false);
     $('btn-diag-close').addEventListener('click', function () { setDiag(false); }, false);
-    $('btn-fullscreen').addEventListener('click', toggleFullscreen, false);
+    $('btn-fullscreen').addEventListener('click', overlayTap(toggleFullscreen), false);
     $('toast').addEventListener('click', function () { setClass($('toast'), 'is-hidden', true); }, false);
     document.addEventListener('fullscreenchange', updateFullscreenButton, false);
     document.addEventListener('webkitfullscreenchange', updateFullscreenButton, false);

@@ -154,7 +154,7 @@ class AssistantTestCase(DashboardTestCase):
         cfg = json.loads(json.dumps(am.DEFAULT_ASSISTANT_CONFIG))
         cfg.update(base_url="http://127.0.0.1:%d/v1" % self.gateway.server_port, env_file=self.env_path,
                    state_file=self.state_path, usage_log=self.usage_path, min_interval_seconds=0,
-                   timeout_seconds=2)
+                   timeout_seconds=2, fallback_enabled=False)
         cfg.update(over)
         am.validate_assistant_config(cfg)
         return cfg
@@ -646,7 +646,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual((d["max_output_tokens"], d["max_question_chars"], d["timeout_seconds"]), (300, 1000, 30))
         self.assertEqual(d["model"], "google/gemini-2.5-flash-lite")
         self.assertEqual(d["base_url"], "https://ai-gateway.vercel.sh/v1")
-        cfg = server.load_config(os.path.join(server.BASE_DIR, "config.json"))
+        cfg = server.load_config(os.path.join(server.BASE_DIR, "config.example.json"))
         self.assertEqual(cfg["assistant"]["model"], "google/gemini-2.5-flash-lite")
 
 

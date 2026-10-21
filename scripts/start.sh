@@ -5,6 +5,11 @@ cd "$(dirname "$0")/.."
 mkdir -p logs run
 PIDFILE=run/dashboard.pid
 
+# Local fallback models (see README "Local fallback"). Skip with NO_LOCAL_AI=1. Never blocks the dashboard.
+if [ "${NO_LOCAL_AI:-0}" != 1 ] && [ -x scripts/local-ai-start.sh ]; then
+  scripts/local-ai-start.sh || echo "warning: local fallback models did not start (dashboard continues)" >&2
+fi
+
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
   echo "dashboard already running (PID $(cat "$PIDFILE"))"
   exit 0

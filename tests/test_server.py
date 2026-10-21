@@ -191,7 +191,6 @@ class StaticAndApiTests(DashboardTestCase):
         resp, _ = self.request(self.port, "/api/nope")
         self.assertEqual(resp.status, 404)
 
-
 class MediaTests(DashboardTestCase):
     def setUp(self):
         self.port = self.serve(self.make_app())

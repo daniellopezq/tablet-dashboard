@@ -148,7 +148,7 @@ class VoiceTestCase(DashboardTestCase):
         cfg = json.loads(json.dumps(vm.DEFAULT_VOICE_CONFIG))
         cfg.update(base_url="http://127.0.0.1:%d/openai/v1" % self.groq.server_port, env_file=self.env_path,
                    state_file=self.state_path, usage_log=self.usage_path, tmp_dir=self.tmp_dir,
-                   min_interval_seconds=0, timeout_seconds=3)
+                   min_interval_seconds=0, timeout_seconds=3, fallback_enabled=False)
         cfg.update(over)
         vm.validate_voice_config(cfg)
         return cfg

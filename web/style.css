@@ -33,7 +33,7 @@ html, body {
 }
 
 .rail {
-  width: 112px;
+  width: 150px;
   padding: 8px;
   box-sizing: border-box;
   background: #111821;
@@ -49,6 +49,19 @@ html, body {
 }
 .rail-clock.warn { color: #d29922; }
 .rail-clock.bad { color: #f85149; }
+/* shown while the admin page's offline test switch is on, so a test isn't mistaken for an outage */
+.offline-tag {
+  display: none;
+  margin: 0 0 6px;
+  padding: 3px 0;
+  border-radius: 4px;
+  background: #f85149;
+  color: #fff;
+  font-size: 11px;
+  font-weight: bold;
+  text-align: center;
+}
+.offline-tag.show { display: block; }
 
 button {
   font-family: inherit;
@@ -56,23 +69,70 @@ button {
   cursor: pointer;
   outline: none;
 }
-.nav-btn {
+/* Back/Next fill the rail height; the 12px gaps are dead zones so a slightly-off tap
+   on the poor touchscreen hits nothing instead of a neighbouring button. */
+.step-btn {
   display: block;
   width: 100%;
-  height: 56px;
-  margin: 0 0 6px 0;
-  padding: 4px 0 0 0;
-  border: 1px solid #1e2934;
+  min-height: 60px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid #2b3846;
+  border-radius: 12px;
+  background: #16202b;
+  color: #e8edf2;
+  font-size: 20px;
+  font-weight: bold;
+}
+.step-arrow { display: block; font-size: 22px; line-height: 26px; color: #58a6ff; }
+.nav-current {
+  display: block;
+  width: 100%;
+  margin: 12px 0;
+  padding: 6px 0;
+  border: 1px solid #388bfd;
+  border-radius: 12px;
+  background: #1f6feb;
+  color: #ffffff;
+}
+.nav-current img { display: block; width: 30px; height: 30px; margin: 0 auto 2px auto; }
+.nav-current-name { display: block; font-size: 17px; font-weight: bold; }
+.nav-current-pos { display: block; font-size: 12px; color: #c9d7ff; }
+.more-btn { width: 100%; margin-top: 12px; }
+
+/* full-screen pickers (jump grid, More); flex rows only, no CSS grid on Android 4.4 */
+.overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  padding: 10px 14px 14px 14px;
+  box-sizing: border-box;
+  background: #0b0f14;
+  z-index: 30;
+}
+.overlay-head { -webkit-box-align: center; -webkit-align-items: center; align-items: center; font-size: 22px; margin-bottom: 12px; }
+.overlay-close {
+  height: 52px;
+  min-width: 140px;
+  border: 1px solid #2b3846;
   border-radius: 10px;
   background: #16202b;
-  color: #a9b6c3;
-  font-size: 14px;
+  font-size: 20px;
 }
-.nav-btn img { display: block; width: 28px; height: 28px; margin: 0 auto 2px auto; }
-.nav-btn span { display: block; }
-.nav-btn.active { background: #1f6feb; border-color: #388bfd; color: #ffffff; }
+.jump-row + .jump-row { margin-top: 14px; }
+.jump-tile {
+  margin: 0;
+  padding: 0;
+  border: 1px solid #2b3846;
+  border-radius: 14px;
+  background: #16202b;
+  color: #e8edf2;
+  font-size: 24px;
+}
+.jump-tile + .jump-tile { margin-left: 14px; }
+.jump-tile img { display: block; width: 56px; height: 56px; margin: 0 auto 8px auto; }
+.jump-tile.active { background: #1f6feb; border-color: #388bfd; color: #ffffff; }
+.jump-tile.unsupported { color: #6e7d8c; border-style: dashed; }
 
-.tools { margin-top: 6px; }
 .tool-btn {
   height: 40px;
   padding: 0 10px;
@@ -81,7 +141,6 @@ button {
   background: #16202b;
   font-size: 15px;
 }
-.tools .tool-btn + .tool-btn { margin-left: 6px; }
 .tool-btn.unsupported { color: #6e7d8c; border-style: dashed; }
 
 .toast {
@@ -95,7 +154,7 @@ button {
   text-align: center;
   z-index: 20;
 }
-.tool-btn:active, .nav-btn:active { background: #263445; }
+.tool-btn:active, .step-btn:active, .nav-current:active, .jump-tile:active, .overlay-close:active { background: #263445; }
 
 .main { position: relative; overflow: hidden; }
 
@@ -220,10 +279,11 @@ button {
 .ai-title { font-size: 22px; font-weight: 400; }
 .ai-note { margin-left: 12px; font-size: 15px; color: #8b98a5; overflow: hidden; text-overflow: ellipsis; }
 .ai-left { font-size: 13px; color: #6e7d8c; }
+.ai-top { height: 124px; margin-bottom: 8px; }
 .ai-input {
   display: block;
   width: 100%;
-  height: 78px;
+  min-height: 0;
   margin: 0;
   padding: 8px 10px;
   box-sizing: border-box;
@@ -241,9 +301,9 @@ button {
   -webkit-appearance: none;
 }
 .ai-input:focus { border-color: #388bfd; }
-.ai-actions { margin: 8px 0; -webkit-box-align: center; -webkit-align-items: center; align-items: center; }
+.ai-actions { margin-top: 8px; -webkit-box-align: center; -webkit-align-items: center; align-items: center; }
 .ai-btn {
-  height: 44px;
+  height: 48px;
   min-width: 92px;
   padding: 0 18px;
   border: 1px solid #2b3846;
@@ -256,24 +316,43 @@ button {
 .ai-btn:active { background: #263445; }
 .ai-btn.primary:active { background: #1858c0; }
 .ai-btn[disabled] { opacity: 0.5; }
-.ai-btn img { width: 20px; height: 20px; vertical-align: middle; margin: -3px 6px 0 0; }
-.ai-btn.recording { background: #b62324; border-color: #f85149; color: #ffffff; }
+/* Voice: one big target for the tablet's weak touchscreen. Block layout inside the button,
+   because Chrome 50 cannot make a <button> a flex container. */
+.ai-voice {
+  width: 150px;
+  margin: 0 0 0 10px;
+  padding: 0;
+  border: 2px solid #2ea043;
+  border-radius: 14px;
+  background: #1a7f37;
+  color: #ffffff;
+  font-size: 26px;
+  font-weight: 700;
+}
+.ai-voice img { display: block; width: 52px; height: 52px; margin: 0 auto 6px auto; }
+.ai-voice span { display: block; }
+.ai-voice:active { background: #156a2d; }
+.ai-voice[disabled] { opacity: 0.5; }
+.ai-voice.recording { background: #b62324; border-color: #f85149; }
+.ai-voice.recording:active { background: #8e1b1c; }
 .offscreen { position: absolute; left: -9999px; top: 0; width: 1px; height: 1px; opacity: 0; }
-.ai-status { font-size: 14px; color: #8b98a5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* up to two lines, so labels like "Local fallback (small model, may be wrong)" fit beside Ask/Clear */
+.ai-status { font-size: 14px; line-height: 17px; max-height: 34px; color: #8b98a5; overflow: hidden; }
 .ai-status.warn { color: #d29922; }
 .ai-status.bad { color: #f85149; }
 .ai-status a { color: #58a6ff; text-decoration: underline; padding: 6px 0; }
 .ai-chars { font-size: 13px; color: #6e7d8c; margin-left: 8px; white-space: nowrap; }
+/* The answer is paged, not scrolled: app.js sizes .ai-answer-text to whole lines and
+   moves its scrollTop one page at a time with the Back/Next buttons. */
 .ai-answer {
-  padding: 10px 12px;
+  padding: 8px 14px;
   box-sizing: border-box;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
+  overflow: hidden;
   background: #121a23;
   border: 1px solid #1e2934;
   border-radius: 10px;
-  font-size: 20px;
-  line-height: 1.35;
+  font-size: 27px;
+  line-height: 35px;  /* whole pixels so pages line up exactly */
   white-space: pre-wrap;
   word-wrap: break-word;
   -webkit-user-select: text;
@@ -281,6 +360,23 @@ button {
 }
 .ai-answer.muted { color: #6e7d8c; }
 .ai-answer.error { color: #f0b429; }
+.ai-answer-view { overflow: hidden; }
+.ai-pager { width: 150px; margin-left: 10px; }
+.ai-page-btn {
+  display: block;
+  width: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 2px solid #388bfd;
+  border-radius: 14px;
+  background: #1f6feb;
+  color: #ffffff;
+  font-size: 24px;
+  font-weight: 700;
+}
+.ai-page-btn:active { background: #1858c0; }
+.ai-page-btn[disabled] { opacity: 0.3; }
+.ai-page-num { padding: 6px 0; text-align: center; font-size: 18px; font-weight: 700; color: #a9b6c3; }
 
 /* ---- calendar ---- */
 .cal-head { -webkit-box-align: baseline; -webkit-align-items: baseline; align-items: baseline; margin-bottom: 6px; white-space: nowrap; }
@@ -385,22 +481,37 @@ button {
 
 /* ---- smaller CSS viewports (e.g. 800x400 physical at 1.5 density = 533x267) ---- */
 @media (max-width: 720px), (max-height: 360px) {
-  .rail { width: 84px; padding: 6px; }
+  .rail { width: 110px; padding: 6px; }
   .rail-clock { font-size: 15px; height: 22px; line-height: 22px; margin-bottom: 4px; }
-  .nav-btn { height: 30px; font-size: 11px; margin-bottom: 3px; padding: 0; line-height: 28px; }
-  .nav-btn img { display: inline-block; width: 16px; height: 16px; margin: 0 3px 0 0; vertical-align: middle; }
-  .nav-btn span { display: inline; vertical-align: middle; }
+  .step-btn { min-height: 44px; font-size: 15px; border-radius: 10px; }
+  .step-arrow { font-size: 16px; line-height: 18px; }
+  .nav-current { margin: 8px 0; padding: 3px 0; border-radius: 10px; }
+  .nav-current img { width: 20px; height: 20px; margin-bottom: 0; }
+  .nav-current-name { font-size: 14px; }
+  .nav-current-pos { font-size: 10px; }
+  .more-btn { margin-top: 8px; }
+  .overlay { padding: 6px 10px 10px 10px; }
+  .overlay-head { font-size: 17px; margin-bottom: 8px; }
+  .overlay-close { height: 40px; min-width: 100px; font-size: 16px; }
+  .jump-row + .jump-row { margin-top: 10px; }
+  .jump-tile { font-size: 17px; }
+  .jump-tile + .jump-tile { margin-left: 10px; }
+  .jump-tile img { width: 34px; height: 34px; margin-bottom: 4px; }
   .ai-title { font-size: 17px; }
   .ai-note { font-size: 12px; margin-left: 8px; }
   .ai-left { font-size: 11px; }
-  .ai-input { height: 52px; font-size: 15px; padding: 5px 8px; border-radius: 8px; }
-  .ai-actions { margin: 5px 0; }
-  .ai-btn { height: 34px; min-width: 70px; padding: 0 12px; font-size: 15px; margin-right: 6px; border-radius: 8px; }
-  .ai-btn img { width: 16px; height: 16px; margin-right: 4px; }
-  .ai-status { font-size: 12px; }
-  .ai-chars { font-size: 11px; }
-  .ai-answer { font-size: 15px; padding: 6px 8px; border-radius: 8px; }
-  .tools { margin-top: 4px; }
+  .ai-top { height: 88px; margin-bottom: 6px; }
+  .ai-input { font-size: 15px; padding: 5px 8px; border-radius: 8px; }
+  .ai-actions { margin-top: 5px; }
+  .ai-btn { height: 36px; min-width: 70px; padding: 0 12px; font-size: 15px; margin-right: 6px; border-radius: 8px; }
+  .ai-voice { width: 112px; margin-left: 8px; font-size: 20px; border-radius: 10px; }
+  .ai-voice img { width: 34px; height: 34px; margin-bottom: 3px; }
+  .ai-status { font-size: 12px; line-height: 14px; max-height: 28px; }
+  .ai-chars { display: none; }  /* room for the status; maxlength still applies */
+  .ai-answer { font-size: 20px; line-height: 26px; padding: 5px 10px; border-radius: 8px; }
+  .ai-pager { width: 112px; margin-left: 8px; }
+  .ai-page-btn { font-size: 18px; border-radius: 10px; }
+  .ai-page-num { font-size: 14px; padding: 3px 0; }
   .tool-btn { height: 30px; font-size: 12px; padding: 0 4px; }
   .toast { font-size: 13px; bottom: 24px; padding: 8px 10px; }
   .view { padding: 8px 10px 6px 10px; }

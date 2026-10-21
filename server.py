@@ -23,12 +23,16 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import admin as admin_mod
 import assistant as assistant_mod
 import gcal as gcal_mod
+import health as health_mod
+import localai as localai_mod
 import maps as maps_mod
+import netsim
 import voice as voice_mod
 
-VERSION = "0.6.0"
+VERSION = "0.10.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 USER_AGENT = "TabletDashboard/%s (personal home dashboard)" % VERSION
@@ -59,6 +63,10 @@ DEFAULT_CONFIG = {
     "maps": dict(maps_mod.DEFAULT_MAPS_CONFIG),
     "voice": dict(voice_mod.DEFAULT_VOICE_CONFIG),
     "calendar": dict(gcal_mod.DEFAULT_CALENDAR_CONFIG),
+    "local_ai": dict(localai_mod.DEFAULT_LOCAL_AI_CONFIG),
+    "health": dict(health_mod.DEFAULT_HEALTH_CONFIG),
+    "kuma": dict(health_mod.DEFAULT_KUMA_CONFIG),
+    "admin": dict(admin_mod.DEFAULT_ADMIN_CONFIG),
 }
 
 STATIC_TYPES = {
@@ -154,7 +162,7 @@ def load_config(path):
                 continue
             if key not in cfg:
                 raise ConfigError("unknown config key: %s" % key)
-            if key in ("weather", "assistant", "maps", "voice", "calendar"):
+            if isinstance(DEFAULT_CONFIG[key], dict):
                 if not isinstance(value, dict):
                     raise ConfigError("%s must be a JSON object" % key)
                 for wkey, wvalue in value.items():
@@ -213,6 +221,10 @@ def validate_config(cfg):
         maps_mod.validate_maps_config(cfg["maps"])
         voice_mod.validate_voice_config(cfg["voice"])
         gcal_mod.validate_calendar_config(cfg["calendar"])
+        localai_mod.validate_local_ai_config(cfg["local_ai"])
+        health_mod.validate_health_config(cfg["health"])
+        health_mod.validate_kuma_config(cfg["kuma"])
+        admin_mod.validate_admin_config(cfg["admin"])
     except (ValueError, KeyError, TypeError) as exc:
         raise ConfigError(str(exc))
 
@@ -235,6 +247,7 @@ class WeatherService:
         self._last_error = None
         self._failures = 0
         self._stop = threading.Event()
+        self._wake = threading.Event()
         self._thread = None
 
     def build_url(self):
@@ -256,6 +269,9 @@ class WeatherService:
         deadline = time.monotonic() + timeout * 2
         req = urllib.request.Request(self.build_url(), headers={
             "User-Agent": USER_AGENT, "Accept": "application/json"})
+        if netsim.blocked("weather"):
+            log.warning("weather: network error (offline test)")
+            raise WeatherError("network error")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 length = resp.headers.get("Content-Length")
@@ -404,8 +420,12 @@ class WeatherService:
     def _run(self):
         while not self._stop.is_set():
             self.fetch_once()
-            if self._stop.wait(self.next_delay()):
-                break
+            self._wake.wait(self.next_delay())
+            self._wake.clear()
+
+    def wake(self):
+        """Fetch now (admin page)."""
+        self._wake.set()
 
     def start(self):
         if not self.configured:
@@ -416,6 +436,7 @@ class WeatherService:
 
     def stop(self):
         self._stop.set()
+        self._wake.set()
 
 
 def resolve_under(root, rel):
@@ -456,7 +477,7 @@ def parse_range(header, size):
 
 
 class App:
-    def __init__(self, cfg):
+    def __init__(self, cfg, config_path=None):
         self.cfg = cfg
         self.tz = ZoneInfo(cfg["timezone"])
         self.web_root = os.path.realpath(os.path.join(BASE_DIR, cfg["web_dir"]))
@@ -468,6 +489,10 @@ class App:
         self.maps = maps_mod.MapService(cfg["maps"], w["latitude"], w["longitude"], w["label"],
                                         BASE_DIR, USER_AGENT)
         self.calendar = gcal_mod.CalendarService(cfg["calendar"], self.tz, BASE_DIR, USER_AGENT)
+        self.localai = localai_mod.LocalAI(cfg["local_ai"], BASE_DIR, self.assistant, self.voice)
+        self.admin = admin_mod.AdminService(self, BASE_DIR, config_path or os.path.join(BASE_DIR, "config.json"),
+                                            load_config, VERSION)
+        self.health = health_mod.HealthChecker(cfg["health"], cfg["kuma"], BASE_DIR, self.admin.builtin_checks)
 
     def check(self):
         problems = []
@@ -501,6 +526,7 @@ class App:
             "maps_configured": self.maps.configured,
             "calendar_enabled": self.calendar.enabled,
             "https_port": self.cfg["https_port"],
+            "offline_test": netsim.SIM.state()["services"] if netsim.SIM else [],
         }
 
 
@@ -531,6 +557,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlsplit(self.path).path
+        if path.startswith("/api/admin/"):
+            return self._do_admin(False, "POST")
         if path == "/api/transcribe":
             return self._do_transcribe()
         if path != "/api/assistant":
@@ -612,6 +640,34 @@ class DashboardHandler(BaseHTTPRequestHandler):
             extra["Retry-After"] = str(retry)
         self._send_json(body, False, status=status, extra=extra)
 
+    def _admin_allowed(self):
+        """Admin is served only on the https listener and only to LAN clients."""
+        return getattr(self.server, "is_tls", False) and assistant_mod.is_lan_client(self.client_address[0])
+
+    def _do_admin(self, head, method):
+        parts = urllib.parse.urlsplit(self.path)
+        if method == "POST":
+            self.close_connection = True  # early rejections leave the body unread
+        if not self._admin_allowed() or not self.app.cfg["admin"]["enabled"]:
+            return self._send_json({"ok": False, "error": "not found"}, head, status=404)
+        body = b""
+        if method == "POST":
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            length = self.headers.get("Content-Length", "")
+            if ctype != "application/json":
+                return self._send_json({"ok": False, "error": "Send application/json."}, False, status=415)
+            if self.headers.get("Transfer-Encoding") or not length.isdigit():
+                return self._send_json({"ok": False, "error": "Content-Length is required."}, False, status=411)
+            if int(length) > self.app.cfg["admin"]["max_body_bytes"]:
+                return self._send_json({"ok": False, "error": "Request is too large."}, False, status=413)
+            try:
+                body = self.rfile.read(int(length))
+            except OSError:
+                return
+        status, obj, extra = self.app.admin.handle(method, parts.path, parts.query, self.headers, body,
+                                                   self.client_address[0])
+        self._send_json(obj, head, status=status, extra=extra)
+
     def _assistant_error(self, status, code, message):
         self._send_json({"ok": False, "error": {"code": code, "message": message}}, False, status=status)
 
@@ -636,6 +692,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return self._send_json(self.app.assistant.status(), head)
         if path == "/api/voice/status":
             return self._send_json(self.app.voice.status(), head)
+        if path.startswith("/api/admin/"):
+            return self._do_admin(head, "GET")
+        if path in ("/admin", "/admin/") or path.startswith("/admin."):
+            if not self._admin_allowed() or not self.app.cfg["admin"]["enabled"]:
+                port = self.app.cfg["https_port"]
+                return self._send_text(404, "Not found. The admin page is available on the local network at "
+                                       "https://<server>:%s/admin" % port if port else "Not found", head)
+            rel = "admin.html" if path in ("/admin", "/admin/") else path[1:]
+            full = resolve_under(self.app.web_root, rel)
+            ctype = STATIC_TYPES.get(os.path.splitext(full)[1].lower()) if full else None
+            if not ctype:
+                return self._send_text(404, "Not found", head)
+            return self._send_file(full, ctype, head, ranges=False)
         if path.startswith("/api/"):
             return self._send_json({"error": "not found"}, head, status=404)
         if path.startswith("/maps/"):
@@ -747,8 +816,9 @@ class DashboardServer(ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = 32
 
-    def __init__(self, address, app):
+    def __init__(self, address, app, is_tls=False):
         self.app = app
+        self.is_tls = is_tls
         super().__init__(address, DashboardHandler)
 
     def handle_error(self, request, client_address):
@@ -771,7 +841,7 @@ def make_tls_context(cfg):
 def make_https_server(cfg, app, ctx):
     """Second listener for https (needed for in-page microphone access). The handshake runs
     lazily in each handler thread, so a slow or failing client never blocks accept()."""
-    srv = DashboardServer((cfg["bind"], cfg["https_port"]), app)
+    srv = DashboardServer((cfg["bind"], cfg["https_port"]), app, is_tls=True)
     srv.socket = ctx.wrap_socket(srv.socket, server_side=True, do_handshake_on_connect=False)
     return srv
 
@@ -796,7 +866,8 @@ def main(argv=None):
         cfg["bind"] = args.bind
     if args.port:
         cfg["port"] = args.port
-    app = App(cfg)
+    netsim.install(os.path.join(BASE_DIR, "data", "offline-test.json"))
+    app = App(cfg, args.config)
     problems = app.check()
     if problems:
         for p in problems:
@@ -831,6 +902,7 @@ def main(argv=None):
     app.weather.start()
     app.maps.start()
     app.calendar.start()
+    app.health.start()
     if httpsd:
         threading.Thread(target=httpsd.serve_forever, name="https", daemon=True).start()
         log.info("dashboard https listening on %s:%d", cfg["bind"], cfg["https_port"])
@@ -843,6 +915,7 @@ def main(argv=None):
         app.weather.stop()
         app.maps.stop()
         app.calendar.stop()
+        app.health.stop()
         if httpsd:
             httpsd.shutdown()
             httpsd.server_close()

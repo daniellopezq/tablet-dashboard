@@ -24,7 +24,6 @@ import logging
 import os
 import re
 import secrets
-import stat
 import sys
 import threading
 import time
@@ -34,6 +33,8 @@ import urllib.request
 from datetime import date, datetime, timedelta
 
 import assistant as assistant_mod
+import envfile
+import netsim
 
 log = logging.getLogger("dashboard.calendar")
 
@@ -131,16 +132,9 @@ def load_client(env_path):
     return (cid, secret), None
 
 
-def _read_private(path):
-    """Contents of an owner-only regular file, or raise OSError / PermissionError."""
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    try:
-        st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o077 or st.st_uid != os.getuid():
-            raise PermissionError("insecure file")
-        return os.read(fd, FILE_MAX_BYTES).decode("utf-8", "replace"), st.st_mtime_ns
-    finally:
-        os.close(fd)
+_read_private = envfile.read_private
+write_private = envfile.write_private
+set_env_values = envfile.set_values
 
 
 def load_refresh_token(token_path):
@@ -160,36 +154,39 @@ def load_refresh_token(token_path):
     return token, mtime, None
 
 
-def write_private(path, text):
-    """Atomically write an owner-only (600) file."""
-    d = os.path.dirname(os.path.abspath(path))
-    os.makedirs(d, mode=0o700, exist_ok=True)
-    tmp = os.path.join(d, ".%s.%s.tmp" % (os.path.basename(path), secrets.token_hex(4)))
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.replace(tmp, path)
-    except BaseException:
+def token_info(token_path):
+    """{"problem", "created"} for the sign-in token file, without the token itself."""
+    refresh, _, problem = load_refresh_token(token_path)
+    created = None
+    if refresh:
         try:
-            os.remove(tmp)
-        except OSError:
+            created = json.loads(_read_private(token_path)[0]).get("created")
+        except (OSError, ValueError, AttributeError):
             pass
-        raise
+    return {"problem": problem, "created": created if isinstance(created, str) else None}
 
 
-def set_env_values(env_path, values):
-    """Set NAME=value lines in the .env file, keeping all other lines."""
-    lines = []
+def revoke_token(token_path):
+    """Revoke the refresh token at Google and delete it locally. Returns a list of messages."""
+    out = []
+    refresh, _, problem = load_refresh_token(token_path)
+    if refresh:
+        req = urllib.request.Request(REVOKE_URL, data=urllib.parse.urlencode({"token": refresh}).encode(),
+                                     method="POST", headers={"Content-Type": "application/x-www-form-urlencoded"})
+        try:
+            _http(urllib.request.build_opener(assistant_mod._NoRedirect), req, 15, 65536)
+            out.append("Revoked at Google.")
+        except CalendarError as exc:
+            out.append("Google revoke call failed (%s); remove access at https://myaccount.google.com/connections"
+                       % (exc.detail[0] if exc.code == "http" else exc.code))
+    elif problem != "not_configured":
+        out.append("Token file unreadable (%s)." % problem)
     try:
-        raw, _ = _read_private(env_path)
-        lines = raw.splitlines()
+        os.remove(token_path)
+        out.append("Deleted the local sign-in token.")
     except FileNotFoundError:
-        pass
-    pat = re.compile(r"^\s*(export\s+)?(%s)\s*=" % "|".join(re.escape(n) for n in values))
-    kept = [ln for ln in lines if not pat.match(ln)]
-    kept += ["%s=%s" % (k, v) for k, v in values.items()]
-    write_private(env_path, "\n".join(kept) + "\n")
+        out.append("No local token.")
+    return out
 
 
 # --- HTTP ------------------------------------------------------------------------------------
@@ -203,6 +200,8 @@ class CalendarError(Exception):
 def _http(opener, req, timeout, limit):
     """Return parsed JSON. Raises CalendarError; HTTP errors carry the status in .detail."""
     deadline = time.monotonic() + timeout * 2
+    if netsim.blocked("calendar"):
+        raise CalendarError("network error")  # offline test switch
     try:
         with opener.open(req, timeout=timeout) as resp:
             length = resp.headers.get("Content-Length")
@@ -542,6 +541,11 @@ class CalendarService:
         self._stop.set()
         self._wake.set()
 
+    def wake(self):
+        """Fetch now (admin page), e.g. right after a new sign-in."""
+        self._blocked_mtime = None
+        self._wake.set()
+
 
 # --- one-time sign-in (loopback redirect + PKCE) ---------------------------------------------
 
@@ -746,23 +750,8 @@ def cmd_test(_args):
 
 def cmd_revoke(_args):
     _, _, token_path = _cli_paths()
-    refresh, _, problem = load_refresh_token(token_path)
-    if refresh:
-        req = urllib.request.Request(REVOKE_URL, data=urllib.parse.urlencode({"token": refresh}).encode(),
-                                     method="POST", headers={"Content-Type": "application/x-www-form-urlencoded"})
-        try:
-            _http(urllib.request.build_opener(assistant_mod._NoRedirect), req, 15, 65536)
-            print("Revoked at Google.")
-        except CalendarError as exc:
-            print("Google revoke call failed (%s); remove access at https://myaccount.google.com/connections"
-                  % (exc.detail[0] if exc.code == "http" else exc.code))
-    elif problem != "not_configured":
-        print("Token file unreadable (%s)." % problem)
-    try:
-        os.remove(token_path)
-        print("Deleted %s." % token_path)
-    except FileNotFoundError:
-        print("No local token.")
+    for line in revoke_token(token_path):
+        print(line)
 
 
 def main(argv):

@@ -34,5 +34,32 @@
       "primary"
     ],
     "days_ahead": 7
+  },
+  "health": {
+    "_comment": "Built-in health checks shown on the admin page (https://<server>:8443/admin). targets: other services on your network, {\"name\",\"type\":\"tcp\",\"host\",\"port\"} or {\"name\",\"type\":\"http\",\"url\"}. Set google_token_max_age_days to null once your Google Cloud app is published.",
+    "google_token_max_age_days": 7,
+    "targets": [
+      {
+        "name": "Media server",
+        "type": "tcp",
+        "host": "127.0.0.1",
+        "port": 32400
+      }
+    ]
+  },
+  "kuma": {
+    "_comment": "Optional Uptime Kuma: set base_url and status_page_slug (or use_metrics with KUMA_API in .env), then enabled.",
+    "enabled": false,
+    "base_url": "",
+    "status_page_slug": "",
+    "use_metrics": false
+  },
+  "local_ai": {
+    "_comment": "Optional local fallback models (llama.cpp / whisper.cpp) in a local-ai/ folder next to this project. See README \"Local fallback\". Editable from the admin page.",
+    "llm_model": "Qwen3.5-2B-Q4_K_M.gguf",
+    "llm_backend": "cpu",
+    "stt_model": "ggml-base.bin",
+    "stt_backend": "vulkan",
+    "threads": 2
   }
 }
