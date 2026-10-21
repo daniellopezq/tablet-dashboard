@@ -42,6 +42,11 @@ Give a drawer tablet a second life as a useful wall/desk display that:
 
 ## 4. Architecture
 
+Since 0.15.0 the same server also serves a modern view to phones and PCs. `uidetect.py` reads the User-Agent (with
+`?ui=` and cookie overrides). The old tablet still gets the ES5 page in `web/`. Newer browsers get ES modules from
+`web-modern/`, which use the same JSON API. New features never have to hold back the old page, and phones never have
+to run the tablet's constrained layout. See the README section "Modern view and browser detection".
+
 ```mermaid
 flowchart LR
   T["Tablet<br/>Chrome 50, ES5 page"] -- "http :8099 / https :8443" --> S

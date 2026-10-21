@@ -22,6 +22,9 @@ The tablet runs plain ES5 JavaScript; a lightweight Python server handles APIs, 
 - **Uptime:** Uptime Kuma and configured TCP/HTTP health monitors, with status, response times and a short history.
 - **Home:** large Home Assistant tiles for lights, plugs, scripts and configured alarm actions, with current device state; optional Plex/Jellyfin switch.
 - **Cameras:** Home Assistant camera snapshots and motion pop-ups (e.g. Blink), plus RTSP-to-MJPEG live viewing of local cameras (e.g. V380) through an on-demand FFmpeg process.
+- **Modern view for phones and PCs:** the same address gives newer browsers a responsive page with every section: an
+  Overview grid on a PC, a tab bar on a phone, light and dark themes, and one-tap voice. The old tablet keeps its
+  lightweight page. The server picks the page from the browser's User-Agent.
 
 ## Why it's useful
 
@@ -40,7 +43,7 @@ The browser is a thin client: no frontend build, modern JavaScript syntax, or he
 | Area | Used |
 |---|---|
 | Server | Python 3.9+ standard library (`http.server`, `ssl`, `urllib`, `zoneinfo`); no frameworks |
-| Front end | Plain HTML, CSS and ES5 JavaScript, Web Audio and getUserMedia; no build step |
+| Front end | Plain HTML and CSS; ES5 JavaScript for the tablet, ES modules for phones and PCs; Web Audio, getUserMedia, MediaRecorder; no build step |
 | Weather | [Open-Meteo](https://open-meteo.com/) Forecast API (no key) |
 | Maps | [OpenWeatherMap](https://openweathermap.org/) tiles over [OpenStreetMap](https://www.openstreetmap.org/) base tiles, composited with Pillow |
 | Calendar | Google Calendar API (read-only OAuth with PKCE) |
@@ -98,7 +101,9 @@ Optional features need extra setup and stay disabled or show a "not set up" mess
 | `envfile.py` | Owner-only file helpers for `.env` and other private files |
 | `config.example.json` | Example settings; copy to `config.json` (gitignored) |
 | `.env` | **Private** API keys (mode 600; never served, gitignored) |
-| `web/` | The only directory served as static files |
+| `uidetect.py` | Picks the classic or modern page for `/` (User-Agent, `?ui=`, `ui` cookie) |
+| `web/` | Classic tablet page (ES5) and static files; its icons are shared with the modern view |
+| `web-modern/` | Modern view for phones and PCs (ES modules, no build step), served under `/m/` |
 | `media/` | Optional; the only directory served under `/media/` (mp4, m4v, webm) |
 | `data/`, `logs/`, `run/` | Runtime state, log and PID file (created automatically, gitignored) |
 | `scripts/` | `start.sh`, `stop.sh`, `make-cert.sh`, `set-assistant-key.sh`, `set-admin-password.sh`, `offline-test.sh`, `local-ai-start.sh`, `local-ai-stop.sh` |
@@ -114,6 +119,8 @@ Optional features need extra setup and stay disabled or show a "not set up" mess
 | `https_port` | `null` | Optional https listener (see "Voice input") |
 | `timezone` | `UTC` | Clock timezone (IANA name), independent of the server's own timezone |
 | `clock_default_24h` | `true` | Default clock format. The 12h/24h button choice is remembered per browser. |
+| `modern_dir` | `"web-modern"` | Folder for the phone/PC view, served under `/m/` |
+| `ui.modern_enabled` | `true` | `false` sends every browser to the classic tablet page |
 | `weather.latitude`, `weather.longitude` | `null` | **Set both to enable weather.** Decimal degrees. |
 | `weather.label` | `""` | Place name shown above the current conditions |
 | `weather.timezone` | `UTC` | Which calendar day the daily high/low and forecast use |
@@ -150,7 +157,9 @@ variables with the same names take priority over the file.
 
 | Route | Behaviour |
 |---|---|
-| `/` and static files | Only from `web/`; html, css, js, svg, png, ico, txt and crt. No directory listings. Dotfiles, `..`, encoded traversal, backslashes, NUL bytes and symlinks leaving `web/` return 404. |
+| `/` | Classic page (`web/index.html`) or modern page (`web-modern/index.html`), chosen by `?ui=`, the `ui` cookie, then the User-Agent. See "Modern view and browser detection". |
+| `/m/<file>` | Modern view files from `web-modern/`, with the same rules as `web/`. |
+| static files | Only from `web/`; html, css, js, svg, png, ico, txt and crt. No directory listings. Dotfiles, `..`, encoded traversal, backslashes, NUL bytes and symlinks leaving `web/` return 404. |
 | `/api/time` | Server time, timezone and UTC offset; never cached |
 | `/api/weather` | Cached weather plus status (`unconfigured`, `loading`, `error`, `ok`) and a `stale` flag. Never contacts Open-Meteo during the request. |
 | `/api/calendar` | Cached agenda grouped by day, plus status. LAN clients only. |
@@ -169,6 +178,38 @@ variables with the same names take priority over the file.
 | `/admin`, `/api/admin/*` | Admin page and its JSON API: **https listener and LAN clients only** (404 otherwise). See "Admin page". |
 
 Only GET and HEAD are accepted, apart from the POST routes above. Idle connections time out after 20 s.
+
+## Modern view and browser detection
+
+Old browsers like the tablet's Chrome 50 need the classic ES5 page in `web/`. Phones and PCs get a newer page from
+`web-modern/` at the same address. It's built with plain ES modules: no build step, no framework, and nothing loaded
+from the internet. Both pages use the same `/api/*` routes, so the LAN-only rules apply unchanged.
+
+`uidetect.py` decides what `GET /` sends. The first rule that matches wins:
+
+1. `?ui=classic` or `?ui=modern` picks a view and remembers it for a year (`ui` cookie). Add `&once=1` to pick it for
+   this visit only. `?ui=auto` forgets the choice.
+2. A `ui` cookie, if one is set.
+3. The User-Agent. The classic view goes to Chrome/Chromium below 80, Firefox below 78, Safari or iOS below 14, and IE.
+   Everything else, including unknown browsers, gets the modern view.
+
+A browser that gets the modern page but can't run it falls back to the classic one by itself. Without ES modules it
+runs `fallback.js`; if `app.js` fails to load, `boot.js` catches that. `/index.html` is always the classic page.
+`"ui": {"modern_enabled": false}` in `config.json` sends everyone to the classic view.
+
+| Screen | Layout |
+|---|---|
+| PC (900 px and wider) | Sidebar plus an Overview grid: clock and weather, Home tiles, the rotating map, camera thumbnails, upcoming events, uptime, Ask |
+| Phone | Bottom tab bar: Overview, Home, Cameras, Ask, More (Weather, Maps, Calendar, Uptime) |
+
+Every section is available. Cameras have their own pages (`#cameras/<id>`): live MJPEG for RTSP cameras, **New
+snapshot** for Home Assistant ones. A motion alert shows a banner with a **View** link instead of jumping to the camera
+the way the tablet does. Home buttons ask for confirmation exactly like the tablet.
+
+Voice uses `MediaRecorder` and stops by itself after a pause, with the same thresholds as the tablet. Browsers only
+allow the microphone on secure pages, so use the https address (`https://<server>:<https_port>/`). On plain http,
+**Voice** opens the phone's recorder app and the page links to the https address. The theme follows the device's light
+or dark setting. The 12/24 h choice (tap the clock) is shared with the classic view on the same device.
 
 ## Client behaviour
 

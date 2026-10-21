@@ -603,13 +603,19 @@ class SecretHygieneTests(AssistantTestCase):
         port = self.serve(app)
         for path in ("/.env", "/%2e%2e/.env", "/assistant.py", "/config.json", "/data/assistant-state.json"):
             self.assertEqual(self.request(port, path)[0].status, 404, path)
-        for dirpath, _, names in os.walk(app.web_root):
-            for name in names:
-                with open(os.path.join(dirpath, name), "rb") as f:
-                    content = f.read()
-                self.assertNotIn(b"AI_GATEWAY", content, name)
-                self.assertNotIn(b"Bearer", content, name)
-        html = self.request(port, "/")[1]
+        for root in (app.web_root, app.modern_root):
+            for dirpath, _, names in os.walk(root):
+                for name in names:
+                    with open(os.path.join(dirpath, name), "rb") as f:
+                        content = f.read()
+                    self.assertNotIn(b"AI_GATEWAY", content, name)
+                    self.assertNotIn(b"Bearer", content, name)
+                    if name.endswith(".js") and root == app.modern_root:
+                        self.assertNotIn(b"innerHTML", content, name)  # modern UI builds DOM nodes only
+        # The tablet (Chrome 50) gets the classic page.
+        tablet = {"User-Agent": "Mozilla/5.0 (Linux; Android 4.4.2) AppleWebKit/537.36 "
+                                "(KHTML, like Gecko) Chrome/50.0.2661.89 Safari/537.36"}
+        html = self.request(port, "/", headers=tablet)[1]
         self.assertIn(b"view-assistant", html)
         self.assertIn(b"Each question starts fresh.", html)
         with open(os.path.join(app.web_root, "app.js")) as f:

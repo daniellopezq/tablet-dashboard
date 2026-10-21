@@ -32,9 +32,10 @@ import home as home_mod
 import localai as localai_mod
 import maps as maps_mod
 import netsim
+import uidetect
 import voice as voice_mod
 
-VERSION = "0.14.0"
+VERSION = "0.17.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 USER_AGENT = "TabletDashboard/%s (personal home dashboard)" % VERSION
@@ -48,7 +49,11 @@ DEFAULT_CONFIG = {
     "timezone": "UTC",
     "clock_default_24h": True,
     "web_dir": "web",
+    "modern_dir": "web-modern",
     "media_dir": "media",
+    "ui": {
+        "modern_enabled": True,
+    },
     "weather": {
         "latitude": None,
         "longitude": None,
@@ -194,6 +199,10 @@ def validate_config(cfg):
         raise ConfigError("bind must be a string")
     if not isinstance(cfg["clock_default_24h"], bool):
         raise ConfigError("clock_default_24h must be true or false")
+    if not isinstance(cfg["modern_dir"], str) or not cfg["modern_dir"]:
+        raise ConfigError("modern_dir must be a path")
+    if not isinstance(cfg["ui"]["modern_enabled"], bool):
+        raise ConfigError("ui.modern_enabled must be true or false")
     _load_zone(cfg["timezone"], "timezone")
 
     w = cfg["weather"]
@@ -487,6 +496,7 @@ class App:
         self.cfg = cfg
         self.tz = ZoneInfo(cfg["timezone"])
         self.web_root = os.path.realpath(os.path.join(BASE_DIR, cfg["web_dir"]))
+        self.modern_root = os.path.realpath(os.path.join(BASE_DIR, cfg["modern_dir"]))
         self.media_root = os.path.realpath(os.path.join(BASE_DIR, cfg["media_dir"]))
         self.weather = WeatherService(cfg["weather"])
         self.assistant = assistant_mod.Assistant(cfg["assistant"], self.tz, BASE_DIR)
@@ -507,6 +517,8 @@ class App:
         problems = []
         if not os.path.isfile(os.path.join(self.web_root, "index.html")):
             problems.append("missing %s/index.html" % self.web_root)
+        if self.cfg["ui"]["modern_enabled"] and not os.path.isfile(os.path.join(self.modern_root, "index.html")):
+            problems.append("missing %s/index.html (or set ui.modern_enabled to false)" % self.modern_root)
         if not os.path.isdir(self.media_root):
             problems.append("missing media directory %s" % self.media_root)
         return problems
@@ -845,12 +857,32 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not ctype:
                 return self._send_text(404, "Not found", head)
             return self._send_file(full, ctype, head, ranges=True)
-        rel = "index.html" if path == "/" else path[1:]
-        full = resolve_under(self.app.web_root, rel)
+        if path == "/":
+            return self._send_index(head)
+        if path.startswith("/m/"):
+            full = resolve_under(self.app.modern_root, path[len("/m/"):])
+            ctype = STATIC_TYPES.get(os.path.splitext(full)[1].lower()) if full else None
+            if not ctype:
+                return self._send_text(404, "Not found", head)
+            return self._send_file(full, ctype, head, ranges=False)
+        full = resolve_under(self.app.web_root, path[1:])
         ctype = STATIC_TYPES.get(os.path.splitext(full)[1].lower()) if full else None
         if not ctype:
             return self._send_text(404, "Not found", head)
         return self._send_file(full, ctype, head, ranges=False)
+
+    def _send_index(self, head):
+        """Classic page for old browsers (the tablet), modern page for phones and PCs."""
+        ui, cookie = uidetect.choose_ui(self.headers.get("User-Agent", ""),
+                                        urllib.parse.urlsplit(self.path).query,
+                                        self.headers.get("Cookie", ""),
+                                        self.app.cfg["ui"]["modern_enabled"])
+        root = self.app.modern_root if ui == uidetect.MODERN else self.app.web_root
+        extra = {"Vary": "User-Agent, Cookie"}
+        if cookie:
+            extra["Set-Cookie"] = cookie
+        return self._send_file(os.path.join(root, "index.html"), STATIC_TYPES[".html"], head,
+                               ranges=False, extra=extra)
 
     # --- responses ---------------------------------------------------------
     def _common_headers(self):
@@ -884,7 +916,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         headers.update(extra or {})
         self._send_bytes(status, body, "application/json; charset=utf-8", head, headers)
 
-    def _send_file(self, full, ctype, head, ranges):
+    def _send_file(self, full, ctype, head, ranges, extra=None):
         try:
             f = open(full, "rb")
         except OSError:
@@ -912,6 +944,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if ctype.startswith("text/html"):
                 self.send_header("Content-Security-Policy", CSP)
                 self.send_header("X-Frame-Options", "DENY")
+            for key, value in (extra or {}).items():
+                self.send_header(key, value)
             self.end_headers()
             if head:
                 return

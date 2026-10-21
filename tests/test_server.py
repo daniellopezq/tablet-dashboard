@@ -82,6 +82,14 @@ class DashboardTestCase(unittest.TestCase):
         os.makedirs(cls.media)
         with open(os.path.join(cls.web, "index.html"), "w") as f:
             f.write("<!DOCTYPE html><title>t</title>")
+        cls.modern = os.path.join(cls.tmp, "web-modern")
+        os.makedirs(cls.modern)
+        with open(os.path.join(cls.modern, "index.html"), "w") as f:
+            f.write("<!DOCTYPE html><title>modern</title>")
+        with open(os.path.join(cls.modern, "app.js"), "w") as f:
+            f.write("export const x = 1;")
+        with open(os.path.join(cls.modern, ".secret.js"), "w") as f:
+            f.write("secret")
         with open(os.path.join(cls.web, "app.js"), "w") as f:
             f.write("var x = 1;")
         with open(os.path.join(cls.web, ".hidden.js"), "w") as f:
@@ -104,9 +112,11 @@ class DashboardTestCase(unittest.TestCase):
         cls.meteo.shutdown()
         shutil.rmtree(cls.tmp)
 
-    def make_app(self, weather=None):
+    def make_app(self, weather=None, modern_enabled=True):
         cfg = json.loads(json.dumps(server.DEFAULT_CONFIG))
         cfg["web_dir"] = self.web
+        cfg["modern_dir"] = self.modern
+        cfg["ui"]["modern_enabled"] = modern_enabled
         cfg["media_dir"] = self.media
         cfg["weather"]["api_url"] = "http://127.0.0.1:%d/v1/forecast" % self.meteo.server_port
         cfg["weather"]["timeout_seconds"] = 1
@@ -131,6 +141,84 @@ class DashboardTestCase(unittest.TestCase):
         body = resp.read()
         conn.close()
         return resp, body
+
+
+TABLET_UA = ("Mozilla/5.0 (Linux; Android 4.4.2; TAB-10 Build/KOT49H) AppleWebKit/537.36 "
+             "(KHTML, like Gecko) Chrome/50.0.2661.89 Safari/537.36")
+PHONE_UA = ("Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/130.0.0.0 Mobile Safari/537.36")
+
+
+class UiSelectionTests(DashboardTestCase):
+    def setUp(self):
+        self.port = self.serve(self.make_app())
+
+    def test_tablet_gets_classic(self):
+        resp, body = self.request(self.port, "/", headers={"User-Agent": TABLET_UA})
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(body, b"<!DOCTYPE html><title>t</title>")
+        self.assertEqual(resp.getheader("Vary"), "User-Agent, Cookie")
+        self.assertIsNone(resp.getheader("Set-Cookie"))
+        self.assertIn("default-src 'self'", resp.getheader("Content-Security-Policy"))
+
+    def test_phone_gets_modern(self):
+        resp, body = self.request(self.port, "/", headers={"User-Agent": PHONE_UA})
+        self.assertEqual(resp.status, 200)
+        self.assertIn(b"modern", body)
+        self.assertEqual(resp.getheader("Vary"), "User-Agent, Cookie")
+
+    def test_head_matches_get(self):
+        resp, body = self.request(self.port, "/", method="HEAD", headers={"User-Agent": PHONE_UA})
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(body, b"")
+        self.assertEqual(resp.getheader("Content-Length"), str(len("<!DOCTYPE html><title>modern</title>")))
+
+    def test_override_sets_cookie(self):
+        resp, body = self.request(self.port, "/?ui=classic", headers={"User-Agent": PHONE_UA})
+        self.assertNotIn(b"modern", body)
+        self.assertTrue(resp.getheader("Set-Cookie").startswith("ui=classic;"))
+        resp, body = self.request(self.port, "/", headers={"User-Agent": PHONE_UA, "Cookie": "ui=classic"})
+        self.assertNotIn(b"modern", body)
+        resp, body = self.request(self.port, "/?ui=auto", headers={"User-Agent": PHONE_UA, "Cookie": "ui=classic"})
+        self.assertIn(b"modern", body)
+        self.assertIn("Max-Age=0", resp.getheader("Set-Cookie"))
+
+    def test_classic_index_still_reachable_directly(self):
+        resp, body = self.request(self.port, "/index.html", headers={"User-Agent": PHONE_UA})
+        self.assertEqual(body, b"<!DOCTYPE html><title>t</title>")
+
+    def test_modern_assets(self):
+        resp, body = self.request(self.port, "/m/app.js")
+        self.assertEqual(resp.status, 200)
+        self.assertIn("javascript", resp.getheader("Content-Type"))
+        self.assertEqual(body, b"export const x = 1;")
+        for path in ["/m/../server.py", "/m/%2e%2e/web/index.html", "/m/.secret.js", "/m/", "/m/missing.js",
+                     "/m/..%2f..%2foutside.txt"]:
+            with self.subTest(path=path):
+                resp, body = self.request(self.port, path)
+                self.assertIn(resp.status, (400, 404), path)
+                self.assertNotIn(b"secret", body)
+
+    def test_kill_switch(self):
+        port = self.serve(self.make_app(modern_enabled=False))
+        for headers in ({"User-Agent": PHONE_UA}, {"User-Agent": PHONE_UA, "Cookie": "ui=modern"}):
+            resp, body = self.request(port, "/", headers=headers)
+            self.assertEqual(body, b"<!DOCTYPE html><title>t</title>")
+        resp, body = self.request(port, "/?ui=modern", headers={"User-Agent": PHONE_UA})
+        self.assertEqual(body, b"<!DOCTYPE html><title>t</title>")
+
+    def test_check_reports_missing_modern_dir(self):
+        app = self.make_app()
+        app.modern_root = os.path.join(self.tmp, "nope")
+        self.assertTrue(any("ui.modern_enabled" in p for p in app.check()))
+        app.cfg["ui"]["modern_enabled"] = False
+        self.assertEqual(app.check(), [])
+
+    def test_config_validation(self):
+        cfg = json.loads(json.dumps(server.DEFAULT_CONFIG))
+        cfg["ui"]["modern_enabled"] = "yes"
+        with self.assertRaises(server.ConfigError):
+            server.validate_config(cfg)
 
 
 class StaticAndApiTests(DashboardTestCase):

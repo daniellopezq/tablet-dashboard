@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en" data-ui="modern">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#0b0f14">
+<title>Dashboard</title>
+<link rel="icon" href="/icons/partly.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/m/style.css">
+<script nomodule src="/m/fallback.js"></script>
+<script type="module" src="/m/boot.js"></script>
+</head>
+<body>
+<div class="shell" id="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <span class="brand-clock" id="brand-clock">--:--</span>
+      <span class="brand-sub" id="brand-sub">Dashboard</span>
+    </div>
+    <nav class="side-nav" id="side-nav" aria-label="Sections"></nav>
+    <div class="side-foot" id="side-foot"></div>
+  </aside>
+
+  <div class="main-col">
+    <div class="banner" id="banner" hidden></div>
+    <div class="alert" id="alert" role="alert" hidden></div>
+    <main class="content" id="content" tabindex="-1">
+      <p class="boot-msg" id="boot-msg">Loading&hellip;</p>
+    </main>
+    <footer class="foot" id="foot"></footer>
+  </div>
+
+  <nav class="tabbar" id="tabbar" aria-label="Sections"></nav>
+</div>
+
+<div class="sheet" id="more-sheet" hidden>
+  <div class="sheet-panel" role="dialog" aria-label="More sections">
+    <div class="sheet-head"><strong>More</strong><button type="button" class="btn-plain" id="more-close">Close</button></div>
+    <div class="sheet-grid" id="more-grid"></div>
+  </div>
+</div>
+<noscript><p class="boot-msg">JavaScript is required. <a href="/?ui=classic">Open the classic view</a>.</p></noscript>
+</body>
+</html>

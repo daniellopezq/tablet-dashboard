@@ -11,6 +11,77 @@ that period.
 
 ---
 
+Versions 0.15.0 to 0.17.0 were developed on the author's own server and published together.
+
+## 0.17.0 (2026-10-21): Modern view phase 3 (Ask with voice), so every section is now in the modern view
+
+**Added** (modern view for phones and PCs; the tablet's classic view is unchanged)
+- **Ask:** standalone questions (nothing is kept between them), with the same limits, wait countdown, quota line and
+  "local fallback" warning as the tablet. Enter sends; Shift+Enter starts a new line.
+- **One-tap voice with `MediaRecorder`:** tap **Voice**, speak, and recording stops by itself 1.3 s after you finish.
+  It gives up after 7 s without speech and stops at `max_audio_seconds`. The thresholds match the tablet. The
+  recording (WebM/Opus on Chrome and Firefox, MP4 on Safari) goes to the existing `/api/transcribe`, which already
+  accepted those formats, and the text is asked automatically (`voice.auto_ask`). Leaving the page always turns the
+  microphone off.
+- **On plain http:** browsers allow the microphone only on secure pages, so **Voice** opens the phone's recorder app
+  and the page links to the https address for one-tap voice.
+- An Ask card on the Overview (full width on PC). On phones, **Ask** replaces Weather in the tab bar, since the
+  Overview starts with the weather; Weather moves to More.
+
+**Removed**
+- The "open in the classic view" placeholders. Every section now has a modern version.
+
+---
+
+## 0.16.0 (2026-10-20): Modern view phase 2 (Home, Cameras, Calendar)
+
+**Added** (modern view for phones and PCs; the tablet's classic view is unchanged)
+- **Home:** every Home Assistant button and the Plex/Jellyfin switch as large tiles. They use the same wording and
+  confirmations as the tablet (arming or disarming Blink, switching media servers). The state updates immediately and
+  is confirmed on the next poll. Polling runs every 2 s while the media server is switching.
+- **Cameras:** a grid of stills that reload only when a camera has a new picture. Tap one for its own page
+  (`#cameras/<id>`). Snapshot cameras get **New snapshot**. The V380 plays live MJPEG with **Restart live**. Live view
+  pauses after `live_max_seconds` or when the page is hidden, and the stream is dropped when you leave. A picture that
+  fails to load shows "No picture".
+- **Motion alert:** a red banner on every screen with **View**, shown once per alert, that hides after `popup_seconds`.
+  Unlike the tablet, it doesn't jump away from what you're doing.
+- **Calendar:** the coming days with all-day, multi-day, current (highlighted) and past (dimmed) events. Times follow
+  the 12/24 h setting, and the view refreshes every minute.
+- **Overview:** Home tiles, camera thumbnails and upcoming events, alongside weather, maps and uptime.
+- Shared pieces: a confirm dialog, toasts, `section/param` routes, a polling interval that depends on the data, and
+  optimistic updates in the feed store.
+
+**Changed**
+- Only Ask still opens in the classic view (due in 0.17.0).
+
+---
+
+## 0.15.0 (2026-10-20): Modern view for phones and PCs (phase 1)
+
+**Added**
+- **Browser detection on `/`** (`uidetect.py`). Old browsers get the classic tablet page from `web/`, unchanged: Chrome
+  below 80 (the tablet runs Chrome 50), Firefox below 78, Safari/iOS below 14, and IE. Everything else gets the new
+  **modern view** from `web-modern/`. The URL stays the same and the response carries `Vary: User-Agent, Cookie`.
+- **Overrides:** `/?ui=modern` or `/?ui=classic` picks a view and remembers it for a year in a `ui` cookie;
+  `/?ui=auto` forgets the choice; `&once=1` picks it for one visit only. The classic Info panel links to the modern
+  view and back to automatic.
+- **Modern view** (`web-modern/`, ES modules, no build step, no framework, no CDN, same CSP):
+  - PC: sidebar plus an **Overview** grid with clock and current weather, the rotating map, uptime, and links.
+  - Phone: bottom tab bar (Overview, Weather, Home, Cameras, More).
+  - Weather, Maps and Uptime sections. Light and dark themes follow the device. Polling pauses while the page is hidden.
+  - Home, Cameras, Calendar and Ask open in the classic view for now (one visit only) until phases 2 and 3.
+- **Safety net:** browsers without ES modules run `fallback.js`, and a modern app that fails to load (syntax too new),
+  is caught by `boot.js`. Both send the browser to the classic view.
+- Settings: `modern_dir` (default `web-modern`) and `ui.modern_enabled` (default `true`; `false` sends everyone to
+  the classic view). `GET /m/<file>` serves the modern files with the same restrictions as `web/`.
+- Tests: `tests/test_uidetect.py` and new routing tests in `tests/test_server.py`.
+
+**Changed**
+- `/index.html` is always the classic page. The secret-hygiene test also scans `web-modern/` and checks that its
+  JavaScript never uses `innerHTML`.
+
+---
+
 Versions 0.12.0 to 0.14.0 were developed on the author's own server and published together.
 
 ## 0.14.0 (2026-10-20): live view of local RTSP cameras
