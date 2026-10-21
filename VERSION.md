@@ -13,6 +13,22 @@ that period.
 
 Versions 0.7.0 to 0.10.0 were developed on the author's own server and published together in this release.
 
+## 0.11.0 (2026-10-20): Uptime section on the tablet
+
+**Added**
+- **Uptime** tab (between Calendar and Ask; 6 sections now). It shows the Uptime Kuma monitors first, then the
+  `health.targets` services from `config.json`, 4 large cards per page (2x2) with a Back/Next pager. Each card has the
+  name, big UP/DOWN/WAIT, response time, uptime % and a 30-check history strip. Anything down sorts first in its group,
+  a failed card turns red, and the header shows "N up · N down · checked HH:MM".
+- `GET /api/uptime` (LAN only, like `/api/calendar`): `HealthChecker.public_snapshot()` in `health.py`. It sends only
+  names, states, ping, uptime % and recent history: no hostnames, URLs or error text, because the route has no login.
+- Results now carry `ping_ms` (Kuma from `/metrics`, services from the TCP/HTTP timing).
+- Icon `web/icons/uptime.svg`; the jump grid is now 3+3 tiles.
+
+**Notes:** Kuma's `/metrics` has no 24 h uptime, so uptime % comes from the dashboard's own in-memory history (checks
+every `interval_seconds`, up to 24 h). It restarts with the server, and the card shows the span ("1 min", "3 h") until
+24 h have built up. The tab polls only while it's visible.
+
 ## 0.10.0 (2026-10-20): Back/Next navigation for the touchscreen
 
 **Changed**

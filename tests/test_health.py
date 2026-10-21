@@ -186,6 +186,34 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(by["kuma:Shop"]["state"], "fail")
         self.assertEqual(snap["counts"]["fail"], 2)
 
+    def test_public_snapshot_for_tablet(self):
+        builtin = mock.Mock(return_value=[{"id": "x", "name": "X", "group": "Dashboard", "state": "ok", "detail": ""}])
+        hcfg = dict(health.DEFAULT_HEALTH_CONFIG, targets=[
+            {"name": "Kuma port", "type": "tcp", "host": "127.0.0.1", "port": self.kuma.server_port}])
+        hc = health.HealthChecker(hcfg, self.kcfg(), "/", builtin)
+        hc.run_once()
+        hc.run_once()
+        snap = hc.public_snapshot()
+        # Kuma first with the failing monitor at the front, then services; no Dashboard checks.
+        self.assertEqual([(c["group"], c["name"]) for c in snap["checks"]],
+                         [("kuma", "Shop"), ("kuma", "Blog"), ("service", "Kuma port")])
+        self.assertTrue(snap["kuma_ok"])
+        self.assertEqual(snap["counts"]["fail"], 1)
+        by = {c["name"]: c for c in snap["checks"]}
+        self.assertEqual(by["Blog"]["ping_ms"], 88)
+        self.assertIsInstance(by["Kuma port"]["ping_ms"], int)
+        self.assertEqual(by["Shop"]["uptime_pct"], 0.0)
+        self.assertEqual(by["Blog"]["uptime_pct"], 100.0)
+        self.assertEqual(by["Blog"]["recent"], "oo")
+        self.assertEqual(by["Blog"]["history_minutes"], 2)
+        # Nothing that names hosts or URLs.
+        text = json.dumps(snap)
+        self.assertNotIn("127.0.0.1", text)
+        self.assertNotIn("timeout", text)
+        for c in snap["checks"]:
+            self.assertNotIn("detail", c)
+            self.assertNotIn("target", c)
+
     def test_builtin_failure_is_reported_not_raised(self):
         hc = health.HealthChecker(dict(health.DEFAULT_HEALTH_CONFIG), dict(health.DEFAULT_KUMA_CONFIG), "/",
                                   mock.Mock(side_effect=RuntimeError("boom")))

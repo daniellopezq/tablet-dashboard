@@ -45,7 +45,7 @@ tablet (800 × 400, Chrome 50), so it runs on hardware most modern web apps can'
 | Local fallback (optional) | [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` (default Qwen3.5-2B Q4_K_M) and [whisper.cpp](https://github.com/ggml-org/whisper.cpp) `whisper-server` (base), loopback only |
 | Uptime (optional) | Built-in TCP/HTTP checks; [Uptime Kuma](https://github.com/louislam/uptime-kuma) status page or `/metrics` |
 | HTTPS | OpenSSL private CA, for microphone access on the LAN |
-| Tests | `unittest` with mock servers for every upstream service (183 tests) |
+| Tests | `unittest` with mock servers for every upstream service (185 tests) |
 
 ## Quick start
 
@@ -144,6 +144,7 @@ variables with the same names take priority over the file.
 | `/api/time` | Server time, timezone and UTC offset; never cached |
 | `/api/weather` | Cached weather plus status (`unconfigured`, `loading`, `error`, `ok`) and a `stale` flag. Never contacts Open-Meteo during the request. |
 | `/api/calendar` | Cached agenda grouped by day, plus status. LAN clients only. |
+| `/api/uptime` | Uptime Kuma monitors, then the `health.targets` services: names, states, ping, uptime % and recent history only (no hosts or URLs). LAN clients only. |
 | `/api/config` | Client settings (version, timezone, clock format, weather unit, https port) |
 | `POST /api/assistant`, `/api/assistant/status` | Ask one question; setup state and remaining quota |
 | `POST /api/transcribe`, `/api/voice/status` | Speech to text; setup state and remaining quota |
@@ -160,10 +161,14 @@ Only GET and HEAD are accepted, apart from the POST routes above. Idle connectio
   whenever the page becomes visible or the local clock jumps. The footer shows sync status (green, amber or red).
 - **Weather:** the server fetches Open-Meteo every 15 min and backs off after failures (1, 2, 4, 8 min). It keeps the last
   good data, which the page marks "Stale".
-- **Navigation:** the left rail has big **Back** / **Next** buttons that step through Weather, Maps, Cameras, Calendar and
-  Ask (wrapping around), with the current section name between them. Tapping the name opens a full-screen grid to jump to
+- **Navigation:** the left rail has big **Back** / **Next** buttons that step through Weather, Maps, Cameras, Calendar,
+  Uptime and Ask (wrapping around), with the current section name between them. Tapping the name opens a full-screen grid to jump to
   any section. **More…** holds 12h/24h, Info and Fullscreen as big buttons. Taps in the first 300 ms after a panel opens
   are ignored, for poor touchscreens.
+- **Uptime:** Uptime Kuma monitors first, then the services under `health.targets` in `config.json`, 4 cards per page
+  with Back/Next. Anything down sorts to the front of its group. Each card shows the state, response time, uptime %
+  over the dashboard's own check history (up to 24 h, kept in memory) and the last 30 checks. It polls every 30 s while
+  the tab is open.
 - **Fullscreen:** in the More panel. If the browser has no fullscreen API, the button is dimmed.
 - **Diagnostics:** the Info button shows user agent, viewport, pixel ratio, sync round-trip, clock error and more.
 - **Offline test tag:** while the admin page's offline test switch is on, a red **OFFLINE TEST** tag shows in the rail.

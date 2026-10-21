@@ -191,6 +191,13 @@ class StaticAndApiTests(DashboardTestCase):
         resp, _ = self.request(self.port, "/api/nope")
         self.assertEqual(resp.status, 404)
 
+    def test_api_uptime(self):
+        resp, body = self.request(self.port, "/api/uptime")
+        self.assertEqual(resp.status, 200)
+        data = json.loads(body)
+        for key in ("enabled", "checks", "counts", "last_run_ms", "kuma_ok"):
+            self.assertIn(key, data)
+
 class MediaTests(DashboardTestCase):
     def setUp(self):
         self.port = self.serve(self.make_app())

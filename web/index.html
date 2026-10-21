@@ -108,6 +108,35 @@
       </div>
     </section>
 
+    <section class="view col" id="view-uptime">
+      <div class="cal-head row">
+        <strong class="cal-title">Uptime</strong>
+        <span class="cal-sub grow" id="up-sub"></span>
+      </div>
+      <div class="up-body row grow">
+        <div class="up-grid col grow" id="up-grid">
+          <div class="up-row row grow">
+            <div class="up-card col grow" id="up-card-0"></div>
+            <div class="up-card col grow" id="up-card-1"></div>
+          </div>
+          <div class="up-row row grow">
+            <div class="up-card col grow" id="up-card-2"></div>
+            <div class="up-card col grow" id="up-card-3"></div>
+          </div>
+        </div>
+        <div class="placeholder col grow is-hidden" id="up-msg">
+          <img src="icons/uptime.svg" alt="">
+          <h2 id="up-msg-title">Loading uptime&hellip;</h2>
+          <p id="up-msg-body"></p>
+        </div>
+        <div class="ai-pager col" id="up-pager">
+          <button type="button" class="ai-page-btn grow" id="up-prev">&#9650; Back</button>
+          <div class="ai-page-num" id="up-page">1 / 1</div>
+          <button type="button" class="ai-page-btn grow" id="up-next">Next &#9660;</button>
+        </div>
+      </div>
+    </section>
+
     <section class="view col" id="view-assistant">
       <div class="ai-head row">
         <strong class="ai-title">Ask a question</strong>
@@ -169,6 +198,7 @@
     </div>
     <div class="jump-row row grow">
       <button type="button" class="jump-tile grow" data-view="calendar"><img src="icons/calendar.svg" alt="">Calendar</button>
+      <button type="button" class="jump-tile grow" data-view="uptime"><img src="icons/uptime.svg" alt="">Uptime</button>
       <button type="button" class="jump-tile grow" data-view="assistant"><img src="icons/assistant.svg" alt="">Ask</button>
     </div>
   </div>

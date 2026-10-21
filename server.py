@@ -32,7 +32,7 @@ import maps as maps_mod
 import netsim
 import voice as voice_mod
 
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 USER_AGENT = "TabletDashboard/%s (personal home dashboard)" % VERSION
@@ -686,6 +686,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not assistant_mod.is_lan_client(self.client_address[0]):
                 return self._send_json({"error": "forbidden"}, head, status=403)
             return self._send_json(self.app.calendar.snapshot(), head)
+        if path == "/api/uptime":
+            # Names of home services: local network only.
+            if not assistant_mod.is_lan_client(self.client_address[0]):
+                return self._send_json({"error": "forbidden"}, head, status=403)
+            return self._send_json(self.app.health.public_snapshot(), head)
         if path == "/api/config":
             return self._send_json(self.app.config_payload(), head)
         if path == "/api/assistant/status":

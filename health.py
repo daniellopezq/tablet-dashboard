@@ -53,6 +53,9 @@ SLUG_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 STATES = ("ok", "warn", "fail", "unknown")
 HISTORY = 1440
 KUMA_STATUS = {0: "down", 1: "up", 2: "pending", 3: "maintenance"}
+PUBLIC_GROUPS = (("Uptime Kuma", "kuma"), ("Services", "service"))  # tablet Uptime view, in this order
+PUBLIC_RECENT = 30
+_MS_RE = re.compile(r"(\d+) ms")
 
 
 def _num(v):
@@ -318,8 +321,10 @@ class HealthChecker:
             else:
                 state, detail = http_check(t["url"], self.cfg["timeout_seconds"])
                 where = t["url"]
+            ms = _MS_RE.search(detail) if state == "ok" else None
             out.append({"id": "target:" + t["name"], "name": t["name"], "group": "Services",
-                        "state": state, "detail": "%s · %s" % (where, detail)})
+                        "state": state, "detail": "%s · %s" % (where, detail),
+                        "ping_ms": int(ms.group(1)) if ms else None})
         return out
 
     def run_once(self):
@@ -335,6 +340,7 @@ class HealthChecker:
             kuma = self.kuma.fetch()
             for m in kuma["monitors"]:
                 results.append({"id": "kuma:" + m["name"], "name": m["name"], "group": "Uptime Kuma",
+                                "ping_ms": m.get("ping_ms"),
                                 "state": {"up": "ok", "down": "fail", "pending": "warn",
                                           "maintenance": "warn"}.get(m["status"], "unknown"),
                                 "detail": " · ".join(x for x in (
@@ -373,6 +379,28 @@ class HealthChecker:
                     "kuma": {"enabled": self.kcfg["enabled"], "source": (self._kuma or {}).get("source"),
                              "error": (self._kuma or {}).get("error"), "push_enabled": self.kcfg["push_enabled"],
                              "push_error": self._push_error}}
+
+    def public_snapshot(self):
+        """Kuma monitors, then service targets, for the tablet's Uptime view. Problems sort first in each
+        group. No details, hostnames or URLs: the tablet is a shared screen and this route needs no login."""
+        rank = {"fail": 0, "warn": 1, "unknown": 2, "ok": 3}
+        with self._lock:
+            checks = []
+            for group, key in PUBLIC_GROUPS:
+                rows = [r for r in self._results if r["group"] == group]
+                rows.sort(key=lambda r: rank.get(r["state"], 2))
+                for r in rows:
+                    h = "".join(self._history.get(r["id"], ()))
+                    checks.append({"name": r["name"], "group": key, "state": r["state"],
+                                   "ping_ms": r.get("ping_ms"), "since_ms": r.get("since_ms"),
+                                   "uptime_pct": round(100.0 * h.count("o") / len(h), 1) if h else None,
+                                   "history_minutes": len(h) * self.cfg["interval_seconds"] // 60,
+                                   "recent": h[-PUBLIC_RECENT:]})
+            counts = collections.Counter(c["state"] for c in checks)
+            return {"enabled": self.cfg["enabled"], "last_run_ms": self._last_run_ms,
+                    "interval_seconds": self.cfg["interval_seconds"], "checks": checks,
+                    "counts": {st: counts.get(st, 0) for st in STATES},
+                    "kuma_ok": None if not self.kcfg["enabled"] or self._kuma is None else bool(self._kuma["ok"])}
 
     def _run(self):
         while not self._stop.is_set():

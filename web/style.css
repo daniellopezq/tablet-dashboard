@@ -479,6 +479,46 @@ button {
 .map-foot { margin-top: 5px; font-size: 11px; }
 .map-foot .attrib + .attrib { margin-left: 14px; }
 
+/* ---- uptime (2x2 cards, pager on the right like the Ask tab) ---- */
+.up-body { min-height: 0; }
+.up-grid { min-width: 0; }
+.up-row + .up-row { margin-top: 10px; }
+.up-card {
+  min-width: 0;
+  padding: 10px 12px;
+  box-sizing: border-box;
+  border: 1px solid #1e2934;
+  border-left-width: 6px;
+  border-radius: 10px;
+  background: #121a23;
+}
+.up-card + .up-card { margin-left: 10px; }
+.up-card.up-empty { visibility: hidden; }
+.up-head { -webkit-box-align: center; -webkit-align-items: center; align-items: center; }
+.up-mid { -webkit-box-align: center; -webkit-align-items: center; align-items: center; }
+.up-dot { width: 14px; height: 14px; border-radius: 7px; margin-right: 8px; background: #6e7d8c; }
+.up-name { font-size: 22px; line-height: 26px; max-height: 52px; overflow: hidden; }
+.up-word { margin-right: 10px; font-size: 30px; font-weight: bold; color: #6e7d8c; }
+.up-stats { font-size: 16px; color: #8b98a5; text-align: right; }
+.up-strip { height: 16px; }
+.up-tick { margin-left: 2px; border-radius: 2px; background: #1e2934; }
+.up-tick:first-child { margin-left: 0; }
+.h-o { background: #2ea043; }
+.h-w { background: #d29922; }
+.h-f { background: #f85149; }
+.h-u { background: #6e7d8c; }
+.up-ok { border-left-color: #2ea043; }
+.up-ok .up-dot { background: #3fb950; }
+.up-ok .up-word { color: #3fb950; }
+.up-warn { border-left-color: #d29922; }
+.up-warn .up-dot { background: #d29922; }
+.up-warn .up-word { color: #d29922; }
+.up-fail { border-color: #f85149; background: #2a1517; }
+.up-fail .up-dot { background: #f85149; }
+.up-fail .up-word { color: #f85149; }
+.up-sub-bad { color: #f85149; }
+#up-pager { width: 116px; margin-left: 10px; }
+
 /* ---- smaller CSS viewports (e.g. 800x400 physical at 1.5 density = 533x267) ---- */
 @media (max-width: 720px), (max-height: 360px) {
   .rail { width: 110px; padding: 6px; }
@@ -546,6 +586,16 @@ button {
   .cal-title { font-size: 17px; }
   .cal-sub { font-size: 11px; margin-left: 8px; }
   .cal-head { margin-bottom: 4px; }
+  .up-row + .up-row { margin-top: 6px; }
+  .up-card { padding: 5px 8px; border-left-width: 5px; border-radius: 8px; }
+  .up-card + .up-card { margin-left: 6px; }
+  .up-dot { width: 10px; height: 10px; margin-right: 5px; }
+  .up-name { font-size: 15px; line-height: 17px; max-height: 34px; }
+  .up-word { font-size: 18px; margin-right: 5px; }
+  .up-stats { font-size: 11px; }
+  .up-strip { height: 10px; }
+  .up-tick { margin-left: 1px; }
+  #up-pager { width: 84px; margin-left: 6px; }
   .cal-day { font-size: 11px; margin: 5px 0 3px 0; }
   .cal-ev { padding: 3px 6px; margin-bottom: 3px; border-left-width: 3px; border-radius: 6px; }
   .cal-time { width: 64px; font-size: 13px; }
