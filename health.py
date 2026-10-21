@@ -311,10 +311,17 @@ class HealthChecker:
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread = None
+        self.stopped_hint = None  # () -> set of target names that are off on purpose (Home tab media switch)
 
     def _targets(self):
         out = []
+        try:
+            stopped = self.stopped_hint() if self.stopped_hint else set()
+        except Exception:
+            stopped = set()
         for t in self.cfg["targets"]:
+            if t["name"] in stopped:
+                continue  # e.g. Jellyfin while Plex is the active media server: not a fault
             if t["type"] == "tcp":
                 state, detail = tcp_check(t["host"], t["port"], self.cfg["timeout_seconds"])
                 where = "%s:%d" % (t["host"], t["port"])

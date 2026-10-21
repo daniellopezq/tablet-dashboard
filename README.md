@@ -1,7 +1,7 @@
 # Tablet Dashboard
 
-Turn an old Android tablet into an always-on home dashboard: clock, weather, animated weather maps, a Google Calendar agenda
-and a voice-enabled AI assistant.
+Turn an old Android tablet into an always-on home dashboard: clock, weather, animated weather maps, a Google Calendar agenda,
+a voice-enabled AI assistant, Home Assistant buttons and a Cameras tab with live view.
 
 A small Python server on your home network does the work. It fetches weather, maps and calendar events, calls the AI
 services and keeps API keys private. The tablet just shows a lightweight web page. The project was built for an Android 4.4
@@ -22,7 +22,9 @@ tablet (800 × 400, Chrome 50), so it runs on hardware most modern web apps can'
   and optional Uptime Kuma monitors, settings, logs and an offline test switch for trying the fallbacks.
 - **Touch-friendly:** big Back/Next buttons to move between sections, and long answers paged with big buttons, for poor
   touchscreens.
-- **Cameras:** placeholder tab for now.
+- **Home:** big tiles that toggle Home Assistant lights, plugs, scripts and alarms, with live ON/OFF state.
+- **Cameras:** snapshots and motion pop-ups from Home Assistant cameras (e.g. Blink), plus live view of local RTSP
+  cameras (e.g. V380) that keeps working without the internet.
 
 ## Why it's useful
 
@@ -43,9 +45,10 @@ tablet (800 × 400, Chrome 50), so it runs on hardware most modern web apps can'
 | AI assistant | [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) (default model: Gemini 2.5 Flash-Lite) |
 | Speech to text | [Groq](https://groq.com/) Whisper large-v3-turbo, with ffmpeg for audio conversion |
 | Local fallback (optional) | [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` (default Qwen3.5-2B Q4_K_M) and [whisper.cpp](https://github.com/ggml-org/whisper.cpp) `whisper-server` (base), loopback only |
+| Home and cameras (optional) | Your own [Home Assistant](https://www.home-assistant.io/) (REST API, long-lived token); RTSP cameras through ffmpeg (MJPEG for old browsers) |
 | Uptime (optional) | Built-in TCP/HTTP checks; [Uptime Kuma](https://github.com/louislam/uptime-kuma) status page or `/metrics` |
 | HTTPS | OpenSSL private CA, for microphone access on the LAN |
-| Tests | `unittest` with mock servers for every upstream service (185 tests) |
+| Tests | `unittest` with mock servers for every upstream service (227 tests) |
 
 ## Quick start
 
@@ -130,7 +133,7 @@ scripts/set-assistant-key.sh --remove                      # delete a key (KEY_N
 ```
 
 The admin page's **API keys** page does the same in the browser: save, replace, remove and test `AI_GATEWAY_API_KEY`,
-`GROQ_API_KEY`, `OPENWEATHER_API_KEY`, `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`, `KUMA_API` and `KUMA_PUSH_URL`. It never
+`GROQ_API_KEY`, `OPENWEATHER_API_KEY`, `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`, `KUMA_API`, `KUMA_PUSH_URL` and `HA_TOKEN`. It never
 shows a stored value, only the last 4 characters, and changes apply without a restart.
 
 The server refuses to use a `.env` that is group- or world-readable, a symlink, or owned by another user. Environment
@@ -145,6 +148,12 @@ variables with the same names take priority over the file.
 | `/api/weather` | Cached weather plus status (`unconfigured`, `loading`, `error`, `ok`) and a `stale` flag. Never contacts Open-Meteo during the request. |
 | `/api/calendar` | Cached agenda grouped by day, plus status. LAN clients only. |
 | `/api/uptime` | Uptime Kuma monitors, then the `health.targets` services: names, states, ping, uptime % and recent history only (no hosts or URLs). LAN clients only. |
+| `/api/home` | Home tab buttons with live state (HA entity states, which media server runs, whether a switch is in progress). LAN clients only. |
+| `POST /api/home/action` | Press one button (`{"id": "..."}`). Same-origin, LAN clients only, 2 s debounce per button. |
+| `/api/cameras` | Camera list (label, availability, image version and time, motion, battery, live) and the current motion `alert`. LAN clients only. |
+| `/api/cameras/<id>.jpg?v=<version>` | Latest still of one camera (from HA by the server, so the token never reaches the tablet, or from the RTSP feed). LAN clients only. |
+| `/api/cameras/<id>/live.mjpg` | Live view of an RTSP camera as MJPEG (`multipart/x-mixed-replace`) for an `<img>`; ends after `live_max_seconds`. At most 4 viewers per camera. LAN clients only. |
+| `POST /api/cameras/snapshot` | Ask one HA camera for a new picture (`{"id": "..."}`); wakes battery cameras, so rate limited. Same-origin, LAN only. |
 | `/api/config` | Client settings (version, timezone, clock format, weather unit, https port) |
 | `POST /api/assistant`, `/api/assistant/status` | Ask one question; setup state and remaining quota |
 | `POST /api/transcribe`, `/api/voice/status` | Speech to text; setup state and remaining quota |
@@ -350,6 +359,54 @@ Steps 3 and 4 can also be done from the admin page's **Google Calendar** page.
 The refresh token is stored in `data/gcal-token.json` (mode 600). Settings live under `calendar`: `calendar_ids`
 (default `["primary"]`) and `days_ahead`.
 
+## Home tab (Home Assistant buttons)
+
+Optional; bring your own [Home Assistant](https://www.home-assistant.io/). One large tile per button in `config.json` →
+`home.buttons`, 8 per page. Create a long-lived token in HA (your profile → Security) and save it as `HA_TOKEN` in `.env`
+(or on the admin page: API keys → Home Assistant token, with a Test button). Set `home.ha_url` if HA isn't at
+`http://127.0.0.1:8123`.
+
+- **`ha`** buttons call a Home Assistant service, e.g. `{"service": "light.toggle", "entity_id": "light.lamp",
+  "state_entity": "light.lamp"}`. With `state_entity` the tile shows ON/OFF; a tap flips it at once and the next poll
+  confirms. Put routines in HA (scripts, scenes) and point a button at `script.turn_on`.
+- **Two-service buttons:** instead of `service`, use `on_service` + `off_service` with `state_entity`; the server picks one
+  by the current state (e.g. arm/disarm an alarm panel; tiles show ARMED / OFF). `"confirm": true` asks first.
+- **`media_switch`** (optional, advanced) runs exactly one of Plex or Jellyfin. It calls your own root-owned
+  `/usr/local/sbin/media-switch <plex|jellyfin>` through `sudo -n`, so you need to write that script and a sudoers rule
+  allowing only it for the dashboard's user. Leave it out of `home.buttons` if you don't want it.
+
+Devices with local control work without the internet; cloud integrations don't.
+**Tests:** `python3 -m unittest tests.test_home` (fake systemctl/sudo and a mock HA; nothing is switched).
+
+## Cameras tab
+
+A 2x2 grid (3x2 for 5-6 cameras) of up to 6 cameras from `config.json` → `cameras.list`, with name, age of the picture and
+one badge (MOTION, BATTERY LOW, MOTION OFF, OFFLINE, LIVE). Tap a camera for the full-size view.
+
+**Home Assistant cameras** (default `"type": "ha"`, e.g. Blink): the latest snapshot HA has, fetched by the server.
+**New snapshot** calls `blink.trigger_camera` (or your `snapshot_service`), rate limited per camera because it wakes
+battery cameras. **Motion pop-up:** the tablet checks `/api/cameras` every 15 s on every tab; when a camera with
+`"popup": true` has new motion, it jumps to that camera and goes back after `popup_seconds` unless someone touched the screen.
+
+**Local RTSP cameras** (`"type": "rtsp"`): read straight from the LAN, with no Home Assistant or cloud.
+
+```json
+{"id": "garage", "label": "Garage", "type": "rtsp", "rtsp_url": "rtsp://192.168.1.20:554/live/ch00_1", "live_fps": 10}
+```
+
+- The tile shows a still that refreshes every `still_seconds` (10). Tap it for the **live view**; **Restart live**
+  reconnects, and after `live_max_seconds` (600) it pauses with **Resume live**. The page drops the stream when you leave
+  the camera, change tabs or the screen turns off.
+- The server runs one ffmpeg per camera, only while someone watches, turning H.264 into MJPEG. Chrome 50 shows MJPEG in a
+  plain `<img>` but can't be relied on to play a live H.264 stream. All viewers share that ffmpeg, which stops
+  `live_idle_seconds` (15) after the last one. A 640x360 sub-stream at 10 fps costs about 10% of one CPU core.
+- V380 cameras: turn on **ONVIF** in the V380 Pro app; RTSP then opens on port 554 (`/live/ch00_0` main, `/live/ch00_1`
+  sub-stream). Use the sub-stream.
+- `rtsp_url` may not contain a user:password or a query. Settings: `cameras.ffmpeg_path`, `still_seconds`,
+  `live_idle_seconds`, `live_max_seconds`, and per camera `live_fps` (1-15).
+
+**Tests:** `python3 -m unittest tests.test_cameras` (mock HA; a fake ffmpeg for RTSP cameras).
+
 ## Weather data
 
 From the [Open-Meteo](https://open-meteo.com/) Forecast API. It needs no key, and the free tier is **for non-commercial use
@@ -359,7 +416,7 @@ credit.
 
 ## Known limitations
 
-- Cameras tab is a placeholder.
+- Cameras: HA cameras such as Blink give snapshots only, no live view. RTSP cameras without a password are visible to anyone on the LAN.
 - English-only day and month names.
 - Logs are not rotated.
 - Answers are not streamed and can take a few seconds.

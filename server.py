@@ -25,14 +25,16 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import admin as admin_mod
 import assistant as assistant_mod
+import cameras as cameras_mod
 import gcal as gcal_mod
 import health as health_mod
+import home as home_mod
 import localai as localai_mod
 import maps as maps_mod
 import netsim
 import voice as voice_mod
 
-VERSION = "0.11.0"
+VERSION = "0.14.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 USER_AGENT = "TabletDashboard/%s (personal home dashboard)" % VERSION
@@ -67,6 +69,8 @@ DEFAULT_CONFIG = {
     "health": dict(health_mod.DEFAULT_HEALTH_CONFIG),
     "kuma": dict(health_mod.DEFAULT_KUMA_CONFIG),
     "admin": dict(admin_mod.DEFAULT_ADMIN_CONFIG),
+    "home": dict(home_mod.DEFAULT_HOME_CONFIG),
+    "cameras": dict(cameras_mod.DEFAULT_CAMERAS_CONFIG),
 }
 
 STATIC_TYPES = {
@@ -225,6 +229,8 @@ def validate_config(cfg):
         health_mod.validate_health_config(cfg["health"])
         health_mod.validate_kuma_config(cfg["kuma"])
         admin_mod.validate_admin_config(cfg["admin"])
+        home_mod.validate_home_config(cfg["home"])
+        cameras_mod.validate_cameras_config(cfg["cameras"])
     except (ValueError, KeyError, TypeError) as exc:
         raise ConfigError(str(exc))
 
@@ -493,6 +499,9 @@ class App:
         self.admin = admin_mod.AdminService(self, BASE_DIR, config_path or os.path.join(BASE_DIR, "config.json"),
                                             load_config, VERSION)
         self.health = health_mod.HealthChecker(cfg["health"], cfg["kuma"], BASE_DIR, self.admin.builtin_checks)
+        self.home = home_mod.Home(cfg["home"], BASE_DIR)
+        self.health.stopped_hint = self.home.intentionally_stopped
+        self.cameras = cameras_mod.Cameras(cfg["cameras"], self.home)
 
     def check(self):
         problems = []
@@ -525,6 +534,8 @@ class App:
             "temperature_unit": self.weather.unit,
             "maps_configured": self.maps.configured,
             "calendar_enabled": self.calendar.enabled,
+            "home_enabled": self.cfg["home"]["enabled"],
+            "cameras_enabled": self.cfg["cameras"]["enabled"] and bool(self.cfg["cameras"]["list"]),
             "https_port": self.cfg["https_port"],
             "offline_test": netsim.SIM.state()["services"] if netsim.SIM else [],
         }
@@ -561,6 +572,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return self._do_admin(False, "POST")
         if path == "/api/transcribe":
             return self._do_transcribe()
+        if path == "/api/home/action":
+            return self._do_home_action()
+        if path == "/api/cameras/snapshot":
+            return self._do_camera_snapshot()
         if path != "/api/assistant":
             return self._method_not_allowed()
         # Always close after a POST: early rejections leave the body unread.
@@ -640,6 +655,90 @@ class DashboardHandler(BaseHTTPRequestHandler):
             extra["Retry-After"] = str(retry)
         self._send_json(body, False, status=status, extra=extra)
 
+    def _read_lan_json(self, what):
+        """Checks for the small LAN-only JSON POST routes. Returns the body's "id", or None after
+        sending an error response."""
+        self.close_connection = True  # early rejections leave the body unread
+        if not assistant_mod.is_lan_client(self.client_address[0]):
+            return self._assistant_error(403, "forbidden", "%s are available on the local network only." % what)
+        if assistant_mod.check_origin(self.headers, self.app.assistant.cfg["allowed_hosts"]):
+            return self._assistant_error(403, "forbidden_origin", "Cross-origin requests are not allowed.")
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ctype != "application/json":
+            return self._assistant_error(415, "unsupported_media_type", "Send application/json.")
+        length = self.headers.get("Content-Length", "")
+        if self.headers.get("Transfer-Encoding") or not length.isdigit():
+            return self._assistant_error(411, "length_required", "Content-Length is required.")
+        if int(length) > 1024:
+            return self._assistant_error(413, "too_large", "Request is too large.")
+        try:
+            raw = self.rfile.read(int(length))
+        except OSError:
+            return None
+        try:
+            bid = json.loads(raw.decode("utf-8")).get("id")
+        except (ValueError, AttributeError):
+            bid = None
+        if not isinstance(bid, str):
+            return self._assistant_error(400, "bad_request", "Send {\"id\": \"...\"}.")
+        return bid
+
+    def _do_home_action(self):
+        """POST /api/home/action {"id": "<button id>"}: press one Home-tab button. LAN only."""
+        bid = self._read_lan_json("Home controls")
+        if bid is None:
+            return
+        try:
+            body = self.app.home.action(bid)
+        except home_mod.ActionError as exc:
+            return self._assistant_error(exc.code, "home_error", str(exc))
+        self._send_json(body, False)
+
+    def _do_camera_snapshot(self):
+        """POST /api/cameras/snapshot {"id": "<camera id>"}: ask one camera for a new picture. LAN only."""
+        cid = self._read_lan_json("Cameras")
+        if cid is None:
+            return
+        try:
+            body = self.app.cameras.request_snapshot(cid)
+        except home_mod.ActionError as exc:
+            return self._assistant_error(exc.code, "camera_error", str(exc))
+        self._send_json(body, False)
+
+    def _stream_live(self, cid, head):
+        """MJPEG (multipart/x-mixed-replace) live view of an RTSP camera, for an <img>. LAN only."""
+        self.close_connection = True
+        try:
+            frames = self.app.cameras.live(cid)
+            first = next(frames)
+        except home_mod.ActionError as exc:
+            return self._send_json({"error": str(exc)}, head, status=exc.code)
+        except StopIteration:
+            feed_error = self.app.cameras.live_error(cid)
+            return self._send_json({"error": feed_error or "camera not answering"}, head, status=502)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self._common_headers()
+            self.end_headers()
+            if head:
+                return
+            frame = first
+            while True:
+                self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n" % len(frame))
+                self.wfile.write(frame)
+                self.wfile.write(b"\r\n")
+                self.wfile.flush()
+                frame = next(frames, None)
+                if frame is None:
+                    return
+        except OSError:  # the viewer went away (or stalled past the socket timeout)
+            pass
+        finally:
+            frames.close()
+
     def _admin_allowed(self):
         """Admin is served only on the https listener and only to LAN clients."""
         return getattr(self.server, "is_tls", False) and assistant_mod.is_lan_client(self.client_address[0])
@@ -691,6 +790,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not assistant_mod.is_lan_client(self.client_address[0]):
                 return self._send_json({"error": "forbidden"}, head, status=403)
             return self._send_json(self.app.health.public_snapshot(), head)
+        if path == "/api/home":
+            # Home controls: local network only.
+            if not assistant_mod.is_lan_client(self.client_address[0]):
+                return self._send_json({"error": "forbidden"}, head, status=403)
+            return self._send_json(self.app.home.status(), head)
+        if path == "/api/cameras" or path.startswith("/api/cameras/"):
+            # Pictures of the home: local network only.
+            if not assistant_mod.is_lan_client(self.client_address[0]):
+                return self._send_json({"error": "forbidden"}, head, status=403)
+            if path == "/api/cameras":
+                return self._send_json(self.app.cameras.snapshot(), head)
+            m = re.match(r"^/api/cameras/([a-z0-9_-]{1,32})/live\.mjpg$", path)
+            if m:
+                return self._stream_live(m.group(1), head)
+            m = re.match(r"^/api/cameras/([a-z0-9_-]{1,32})\.jpg$", path)
+            if not m:
+                return self._send_json({"error": "not found"}, head, status=404)
+            version = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("v", [""])[0][:40]
+            try:
+                data, ctype = self.app.cameras.image(m.group(1), version)
+            except home_mod.ActionError as exc:
+                return self._send_json({"error": str(exc)}, head, status=exc.code)
+            return self._send_bytes(200, data, ctype, head, {"Cache-Control": "private, max-age=300"})
         if path == "/api/config":
             return self._send_json(self.app.config_payload(), head)
         if path == "/api/assistant/status":
@@ -921,6 +1043,7 @@ def main(argv=None):
         app.maps.stop()
         app.calendar.stop()
         app.health.stop()
+        app.cameras.close()
         if httpsd:
             httpsd.shutdown()
             httpsd.server_close()

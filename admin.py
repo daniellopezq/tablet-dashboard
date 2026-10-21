@@ -122,6 +122,7 @@ KEYS = [
      "test": "kuma"},
     {"name": "KUMA_PUSH_URL", "label": "Uptime Kuma push URL", "used_by": "Health (heartbeat)", "kind": "url",
      "test": "kuma_push"},
+    {"name": "HA_TOKEN", "label": "Home Assistant long-lived token", "used_by": "Home tab", "test": "ha"},
 ]
 KEYS_BY_NAME = {k["name"]: k for k in KEYS}
 
@@ -625,6 +626,8 @@ class AdminService:
             r = self.app.health.kuma.fetch()
             return {"ok": r["ok"], "error": r["error"], "ms": ms(),
                     "message": "%d monitors via %s" % (len(r["monitors"]), r["source"]) if r["ok"] else None}
+        if kind == "ha":
+            return dict(self.app.home.test_connection(), ms=ms())
         if kind == "kuma_push":
             err = self.app.health.kuma.push(True, "test from the dashboard admin page")
             return {"ok": not err, "error": err, "message": None if err else "Heartbeat sent", "ms": ms()}

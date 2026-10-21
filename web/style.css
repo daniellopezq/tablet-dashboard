@@ -517,6 +517,107 @@ button {
 .up-fail .up-dot { background: #f85149; }
 .up-fail .up-word { color: #f85149; }
 .up-sub-bad { color: #f85149; }
+
+/* ---- home tab: one big tile per button ---- */
+.hc-grid { min-width: 0; }
+.hc-row + .hc-row { margin-top: 10px; }
+.hc-tile {
+  min-width: 0;
+  margin: 0;
+  padding: 10px 12px;
+  box-sizing: border-box;
+  border: 1px solid #1e2934;
+  border-left-width: 6px;
+  border-radius: 10px;
+  background: #121a23;
+  color: #e8edf2;
+  font-family: inherit;
+  text-align: left;
+  -webkit-box-align: stretch; -webkit-align-items: stretch; align-items: stretch;
+}
+.hc-tile + .hc-tile { margin-left: 10px; }
+.hc-tile:active { background: #263445; }
+.hc-tile.hc-empty { visibility: hidden; }
+.hc-icon { display: block; width: 34px; height: 34px; opacity: 0.8; }
+.hc-word { margin-top: 2px; font-size: 22px; line-height: 26px; font-weight: bold; color: #6e7d8c; white-space: nowrap; overflow: hidden; }
+.hc-name { margin-top: 2px; font-size: 19px; line-height: 22px; max-height: 44px; overflow: hidden; }
+#hc-pager { width: 100px; }
+.hc-hint { font-size: 14px; line-height: 17px; max-height: 34px; overflow: hidden; color: #8b98a5; }
+.hc-on { border-left-color: #d29922; background: #221d12; }
+.hc-on .hc-word { color: #f2cc60; }
+.hc-on .hc-icon { opacity: 1; }
+.hc-off .hc-word { color: #6e7d8c; }
+.hc-warn { border-left-color: #d29922; }
+.hc-warn .hc-word { color: #d29922; }
+.hc-unk { border-style: dashed; }
+.hc-unk .hc-word { color: #6e7d8c; }
+.hc-busy { border-left-color: #388bfd; }
+.hc-busy .hc-word { color: #58a6ff; }
+.hc-err .hc-hint { color: #f85149; }
+.hc-confirm-body { margin: 0 0 14px 0; font-size: 20px; line-height: 26px; color: #c9d4de; }
+.jump-tile.hc-yes { background: #1f6feb; border-color: #388bfd; color: #ffffff; }
+
+/* ---- cameras tab: 2x2 (or 3x2) snapshots, tap for full size or live view ---- */
+.cam-grid { min-height: 0; }
+.cam-row + .cam-row { margin-top: 10px; }
+.cam-card {
+  position: relative;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 2px solid #1e2934;
+  border-radius: 10px;
+  background: #05080b;
+  color: #e8edf2;
+  font-family: inherit;
+}
+.cam-card + .cam-card { margin-left: 10px; }
+.cam-card.cam-empty { visibility: hidden; }
+.cam-card.cam-motion { border-color: #f85149; }
+.cam-img, .cam-big-img {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.cam-big-img { object-fit: contain; }
+.cam-cap {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  padding: 5px 8px;
+  background: rgba(0, 0, 0, 0.62);
+  -webkit-box-align: center; -webkit-align-items: center; align-items: center;
+  text-align: left;
+}
+.cam-name { font-size: 18px; white-space: nowrap; overflow: hidden; }
+.cam-time { margin-left: 8px; font-size: 13px; color: #aab7c4; white-space: nowrap; }
+.cam-badge {
+  display: inline-block;
+  margin: 0 0 0 6px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: bold;
+  white-space: nowrap;
+}
+.cam-b-bad { background: #f85149; color: #ffffff; }
+.cam-b-warn { background: #d29922; color: #0b0f14; }
+.cam-b-dim { background: #30363d; color: #c9d4de; }
+.cam-b-live { background: #238636; color: #ffffff; }
+/* 3 columns: keep the name readable; a badge takes the time's place */
+.cam-grid-3 .cam-name { -webkit-flex-shrink: 0; flex-shrink: 0; }
+.cam-grid-3 .cam-badge + .cam-time { display: none; }
+.cam-detail { min-height: 0; }
+.cam-big { position: relative; min-width: 0; border-radius: 10px; overflow: hidden; background: #05080b; }
+.cam-side { width: 170px; margin-left: 10px; }
+.cam-side-name { font-size: 24px; margin-bottom: 6px; }
+.cam-side-info { font-size: 15px; line-height: 20px; color: #aab7c4; overflow: hidden; }
+.cam-side-info .cam-badge { margin: 4px 4px 0 0; }
+.cam-side .ai-page-btn { max-height: 90px; }
+.cam-side .ai-page-btn + .ai-page-btn { margin-top: 10px; }
+.cam-back { background: #1b2430; border-color: #30363d; }
 #up-pager { width: 116px; margin-left: 10px; }
 
 /* ---- smaller CSS viewports (e.g. 800x400 physical at 1.5 density = 533x267) ---- */
@@ -595,6 +696,26 @@ button {
   .up-stats { font-size: 11px; }
   .up-strip { height: 10px; }
   .up-tick { margin-left: 1px; }
+  .hc-row + .hc-row { margin-top: 6px; }
+  .hc-tile { padding: 5px 7px; border-left-width: 5px; border-radius: 8px; }
+  .hc-tile + .hc-tile { margin-left: 6px; }
+  .hc-icon { width: 20px; height: 20px; }
+  .hc-word { font-size: 14px; line-height: 16px; margin-top: 1px; }
+  .hc-name { margin-top: 1px; font-size: 13px; line-height: 15px; max-height: 30px; }
+  #hc-pager { width: 76px; }
+  #hc-pager .ai-page-btn { font-size: 15px; }
+  .hc-hint { font-size: 11px; line-height: 13px; max-height: 26px; }
+  .hc-confirm-body { font-size: 15px; line-height: 19px; margin-bottom: 8px; }
+  .cam-row + .cam-row { margin-top: 6px; }
+  .cam-card + .cam-card { margin-left: 6px; }
+  .cam-cap { padding: 2px 5px; }
+  .cam-name { font-size: 13px; }
+  .cam-time { font-size: 10px; margin-left: 4px; }
+  .cam-badge { font-size: 9px; padding: 1px 3px; margin-left: 3px; }
+  .cam-side { width: 120px; margin-left: 6px; }
+  .cam-side-name { font-size: 17px; margin-bottom: 3px; }
+  .cam-side-info { font-size: 11px; line-height: 14px; }
+  .cam-side .ai-page-btn + .ai-page-btn { margin-top: 6px; }
   #up-pager { width: 84px; margin-left: 6px; }
   .cal-day { font-size: 11px; margin: 5px 0 3px 0; }
   .cal-ev { padding: 3px 6px; margin-bottom: 3px; border-left-width: 3px; border-radius: 6px; }

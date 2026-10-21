@@ -16,6 +16,15 @@
   var CAL_POLL_MS = 60000;
   var UPTIME_POLL_MS = 30000;
   var UPTIME_PER_PAGE = 4;
+  var HOME_POLL_MS = 10000;
+  var HOME_BUSY_POLL_MS = 2000;   // while the media server is switching
+  var HOME_PER_PAGE = 8;
+  var CAM_POLL_MS = 15000;        // on every tab, so a motion pop-up can appear anywhere
+  var CAM_COUNT = 6;
+  // Grid cards in camera order: rows are cards 0,1,4 and 2,3,5, so up to 4 cameras fill a 2x2 grid.
+  var CAM_SLOTS_4 = [0, 1, 2, 3];
+  var CAM_SLOTS_6 = [0, 1, 4, 2, 3, 5];
+  var CAM_BLANK = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
   var STORAGE_KEY_24H = 'dashboard.use24h';
 
   var DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -71,6 +80,28 @@
     upPage: 0,
     upTimer: null,
     upInFlight: false,
+    // home tab
+    hc: null,
+    hcError: null,
+    hcPage: 0,
+    hcTimer: null,
+    hcInFlight: false,
+    hcBusy: {},
+    hcConfirmId: null,
+    // cameras tab + motion pop-up
+    cam: null,
+    camError: null,
+    camTimer: null,
+    camInFlight: false,
+    camDetail: null,          // id of the camera shown full size, or null for the grid
+    camAlertSeen: '',         // key of the last alert already shown
+    camReturnView: null,      // view to go back to when a pop-up times out
+    camPopupTimer: null,
+    camTouched: false,
+    camLiveId: null,          // RTSP camera whose live view is open, or null
+    camLiveToken: 0,          // changes on every (re)start, so the <img> opens a new stream
+    camLiveEnded: false,      // the live view reached live_max_seconds or failed
+    camLiveTimer: null,
     loadedLocal: Date.now(),
     serverVersion: ''
   };
@@ -1079,6 +1110,7 @@
   // Rail order for Back/Next (wraps around) and the jump grid.
   var VIEWS = [
     { id: 'weather', label: 'Weather', icon: 'icons/partly.svg' },
+    { id: 'home', label: 'Home', icon: 'icons/home.svg' },
     { id: 'maps', label: 'Maps', icon: 'icons/map.svg' },
     { id: 'cameras', label: 'Cameras', icon: 'icons/camera.svg' },
     { id: 'calendar', label: 'Calendar', icon: 'icons/calendar.svg' },
@@ -1105,8 +1137,10 @@
     }
     if (name === 'assistant') { aiLoadStatus(); aiRender(); aiPaginate(); }
     if (name === 'calendar') { renderCalendar(); pollCalendar(); }
+    if (name === 'cameras') { renderCameras(); } else { state.camDetail = null; camStopLive(); }
     mapsSync();
     uptimeSync();
+    homeSync();
   }
 
   function stepView(delta) {
@@ -1125,6 +1159,417 @@
       if (Date.now() - overlayOpenedAt < 300) { return; }
       fn.call(this);
     };
+  }
+
+  // ---- home controls (Home Assistant buttons + Plex/Jellyfin switch; polled only while visible) ----
+  var HC_ICONS = { media: 1, fan: 1, plug: 1, light: 1, home: 1, shield: 1, motion: 1 };
+  var HC_MEDIA = { plex: 'Plex', jellyfin: 'Jellyfin' };
+
+  function homeSync() {
+    clearTimer('hcTimer');
+    if (viewActive('home')) { pollHome(); }
+  }
+
+  function homeButton(id) {
+    var list = state.hc ? state.hc.buttons : [];
+    for (var i = 0; i < list.length; i++) { if (list[i].id === id) { return list[i]; } }
+    return null;
+  }
+
+  function homeMedia() {
+    var list = state.hc ? state.hc.buttons : [];
+    for (var i = 0; i < list.length; i++) { if (list[i].kind === 'media_switch') { return list[i].media; } }
+    return null;
+  }
+
+  function pollHome(delayMs) {
+    clearTimer('hcTimer');
+    if (!viewActive('home')) { return; }
+    if (delayMs) { state.hcTimer = setTimeout(function () { pollHome(); }, delayMs); return; }
+    if (!state.hcInFlight) {
+      state.hcInFlight = true;
+      getJSON('/api/home', WEATHER_TIMEOUT_MS, function (err, data) {
+        state.hcInFlight = false;
+        if (err || !data || !data.buttons) {
+          state.hcError = err ? String(err.message || err) : 'bad response';
+        } else {
+          state.hcError = null;
+          state.hc = data;
+        }
+        renderHome();
+        clearTimer('hcTimer');
+        var m = homeMedia();
+        if (viewActive('home')) {
+          state.hcTimer = setTimeout(function () { pollHome(); }, m && m.switching ? HOME_BUSY_POLL_MS : HOME_POLL_MS);
+        }
+      });
+    }
+  }
+
+  function hcMessage(title, body) {
+    setClass($('hc-grid'), 'is-hidden', true);
+    setClass($('hc-pager'), 'is-hidden', true);
+    setClass($('hc-msg'), 'is-hidden', false);
+    setText($('hc-msg-title'), title);
+    setText($('hc-msg-body'), body || '');
+  }
+
+  // -> { name, word, hint, cls } for one button
+  function hcDescribe(b) {
+    if (b.kind === 'media_switch') {
+      var m = b.media || {};
+      if (m.switching) {
+        return { name: HC_MEDIA[m.switching] || b.label, word: 'WAIT', cls: 'hc-busy',
+          hint: 'Starting ' + (HC_MEDIA[m.switching] || '') + '…' };
+      }
+      var d;
+      if (HC_MEDIA[m.current]) {
+        var other = m.current === 'plex' ? 'Jellyfin' : 'Plex';
+        d = { name: HC_MEDIA[m.current], word: 'ON', cls: 'hc-on', hint: 'Tap to switch to ' + other };
+      } else if (m.current === 'both') {
+        d = { name: 'Plex + Jellyfin', word: 'BOTH', cls: 'hc-warn', hint: 'Tap to keep Plex only' };
+      } else {
+        d = { name: b.label, word: 'OFF', cls: 'hc-off', hint: 'Tap to start Plex' };
+      }
+      if (m.error) { d.hint = m.error; d.cls += ' hc-err'; }
+      return d;
+    }
+    var st = b.state;
+    if (st === undefined) { return { name: b.label, word: 'RUN', cls: 'hc-off', hint: 'Tap to run' }; }
+    if (st === null) { return { name: b.label, word: '?', cls: 'hc-unk', hint: 'HA not connected' }; }
+    if (st === 'on') { return { name: b.label, word: 'ON', cls: 'hc-on', hint: 'Tap to turn off' }; }
+    if (st.indexOf('armed_') === 0) { return { name: b.label, word: 'ARMED', cls: 'hc-on', hint: 'Tap to disarm' }; }
+    if (st === 'disarmed') { return { name: b.label, word: 'OFF', cls: 'hc-off', hint: 'Disarmed · tap to arm' }; }
+    if (st === 'arming' || st === 'pending') { return { name: b.label, word: 'ARMING', cls: 'hc-busy', hint: 'Please wait' }; }
+    if (st === 'triggered') { return { name: b.label, word: 'ALARM', cls: 'hc-warn hc-err', hint: 'Tap to disarm' }; }
+    if (st === 'off') { return { name: b.label, word: 'OFF', cls: 'hc-off', hint: 'Tap to turn on' }; }
+    if (st === 'unavailable' || st === 'missing' || st === 'unknown') {
+      return { name: b.label, word: 'N/A', cls: 'hc-unk', hint: st === 'missing' ? 'Not found in Home Assistant' : 'Device not responding' };
+    }
+    return { name: b.label, word: String(st).toUpperCase(), cls: 'hc-off', hint: '' };
+  }
+
+  function hcFillTile(tile, b) {
+    while (tile.firstChild) { tile.removeChild(tile.firstChild); }
+    tile.setAttribute('data-id', b ? b.id : '');
+    tile.disabled = !b;
+    if (!b) { tile.className = 'hc-tile col grow hc-empty'; return; }
+    var d = hcDescribe(b);
+    var busy = !!state.hcBusy[b.id];
+    tile.className = 'hc-tile col grow ' + d.cls + (busy ? ' hc-busy' : '');
+    // Stacked (icon, state, name, hint) so it fits narrow tiles when the pager is showing.
+    var img = el('img', 'hc-icon');
+    var icon = b.icon || (b.kind === 'media_switch' ? 'media' : 'home');
+    img.src = 'icons/' + (HC_ICONS[icon] ? icon : 'home') + '.svg';
+    img.alt = '';
+    tile.appendChild(img);
+    tile.appendChild(el('span', 'hc-word', busy ? '…' : d.word));
+    tile.appendChild(el('span', 'hc-name grow', d.name));
+    tile.appendChild(el('span', 'hc-hint', d.hint));
+  }
+
+  function renderHome() {
+    var d = state.hc;
+    if (!d) {
+      hcMessage(state.hcError ? 'Home controls unavailable' : 'Loading…',
+        state.hcError ? state.hcError + '. Retrying automatically.' : '');
+      setText($('hc-sub'), '');
+      return;
+    }
+    if (!d.enabled || !d.buttons.length) {
+      hcMessage('No home controls', d.enabled ? 'Add buttons under "home" in config.json.' :
+        'Home controls are turned off in config.json.');
+      setText($('hc-sub'), '');
+      return;
+    }
+    setClass($('hc-grid'), 'is-hidden', false);
+    setClass($('hc-msg'), 'is-hidden', true);
+    var list = d.buttons;
+    var pages = Math.ceil(list.length / HOME_PER_PAGE);
+    state.hcPage = Math.max(0, Math.min(state.hcPage || 0, pages - 1));
+    setClass($('hc-pager'), 'is-hidden', pages <= 1);
+    for (var i = 0; i < HOME_PER_PAGE; i++) {
+      hcFillTile($('hc-tile-' + i), list[state.hcPage * HOME_PER_PAGE + i] || null);
+    }
+    setText($('hc-page'), (state.hcPage + 1) + ' / ' + pages);
+    $('hc-prev').disabled = state.hcPage <= 0;
+    $('hc-next').disabled = state.hcPage >= pages - 1;
+    var parts = [], on = 0;
+    var m = homeMedia();
+    if (m) { parts.push(m.switching ? 'switching media server' : HC_MEDIA[m.current] ? HC_MEDIA[m.current] + ' running' :
+      m.current === 'both' ? 'Plex + Jellyfin both running' : 'no media server'); }
+    for (var k = 0; k < list.length; k++) { if (list[k].state === 'on') { on++; } }
+    if (d.ha_ok === false) { parts.push(d.ha_error || 'Home Assistant not connected'); } else if (on) { parts.push(on + ' on'); }
+    if (state.hcError) { parts.push('offline, showing last data'); }
+    setText($('hc-sub'), parts.join(' · '));
+    setClass($('hc-sub'), 'up-sub-bad', d.ha_ok === false);
+  }
+
+  function homePress(id) {
+    var b = homeButton(id);
+    if (!b || state.hcBusy[id]) { return; }
+    if (b.kind === 'media_switch' && b.media && b.media.switching) { showToast('Already switching, please wait'); return; }
+    if (!b.confirm) { homeSend(id); return; }
+    var title = 'Run ' + b.label + '?', body = '';
+    if (b.state === 'disarmed') { title = 'Arm ' + b.label + '?'; body = 'Cameras will record motion and send alerts.'; }
+    if (b.state && (b.state.indexOf('armed_') === 0 || b.state === 'triggered')) {
+      title = 'Disarm ' + b.label + '?'; body = 'Cameras will stop recording motion.';
+    }
+    if (b.kind === 'media_switch') {
+      var cur = b.media ? b.media.current : '';
+      var to = cur === 'plex' ? 'Jellyfin' : 'Plex', from = cur === 'plex' ? 'Plex' : cur === 'jellyfin' || cur === 'both' ? 'Jellyfin' : '';
+      title = 'Switch to ' + to + '?';
+      body = (from ? from + ' will stop, and anyone watching on it will be cut off. ' : '') +
+        to + ' takes up to a minute to start.';
+    }
+    setText($('hc-confirm-title'), title);
+    setText($('hc-confirm-body'), body);
+    setText($('hc-yes'), b.kind === 'media_switch' ? 'Yes, switch' : 'Yes');
+    state.hcConfirmId = id;
+    setOverlay('hc-confirm', true);
+  }
+
+  function homeSend(id) {
+    var b = homeButton(id);
+    state.hcBusy[id] = true;
+    renderHome();
+    aiRequest('POST', '/api/home/action', { id: id }, 15000, function (err, data) {
+      delete state.hcBusy[id];
+      if (err || !data || !data.ok) {
+        showToast(data && data.error && data.error.message ? data.error.message :
+          err === 'timeout' ? 'No answer from the server' : 'Could not reach the server');
+      } else if (data.pending && b && b.media) {
+        b.media.switching = data.target;  // shown at once; polling picks up the result
+        b.media.error = null;
+      } else if (b && (b.state === 'on' || b.state === 'off')) {
+        b.state = b.state === 'on' ? 'off' : 'on';  // optimistic; HA confirms on the next poll
+      }
+      renderHome();
+      pollHome(1500);
+    });
+  }
+
+  // ---- cameras (Blink snapshots, live view of RTSP cameras) and the motion pop-up ----
+  function camerasSync() {
+    clearTimer('camTimer');
+    if (!isHidden()) { pollCameras(); }
+  }
+
+  function pollCameras() {
+    clearTimer('camTimer');
+    if (isHidden()) { return; }
+    if (!state.camInFlight) {
+      state.camInFlight = true;
+      getJSON('/api/cameras', WEATHER_TIMEOUT_MS, function (err, data) {
+        state.camInFlight = false;
+        if (err || !data || !data.cameras) {
+          state.camError = err ? String(err.message || err) : 'bad response';
+        } else {
+          state.camError = null;
+          state.cam = data;
+          camCheckAlert();
+        }
+        if (viewActive('cameras')) { renderCameras(); }
+      });
+    }
+    state.camTimer = setTimeout(pollCameras, CAM_POLL_MS);
+  }
+
+  function camById(id) {
+    var list = state.cam ? state.cam.cameras : [];
+    for (var i = 0; i < list.length; i++) { if (list[i].id === id) { return list[i]; } }
+    return null;
+  }
+
+  function camAgo(ms) {
+    if (!ms) { return ''; }
+    var now = serverNow();
+    var min = Math.round(((now === null ? Date.now() : now) - ms) / 60000);
+    if (min < 1) { return 'just now'; }
+    if (min < 60) { return min + ' min ago'; }
+    if (min < 1440) { return Math.floor(min / 60) + ' h ago'; }
+    return Math.floor(min / 1440) + ' d ago';
+  }
+
+  // Badges for a camera: [text, class] pairs, most important first.
+  function camBadges(c) {
+    var out = [];
+    if (!c.available) { out.push(['OFFLINE', 'cam-b-bad']); }
+    if (c.live && c.available) { out.push(['LIVE', 'cam-b-live']); }
+    if (c.motion) { out.push(['MOTION', 'cam-b-bad']); }
+    if (c.battery_low) { out.push(['BATTERY LOW', 'cam-b-warn']); }
+    if (c.motion_detection === false) { out.push(['MOTION OFF', 'cam-b-dim']); }
+    return out;
+  }
+
+  function camImageUrl(c) {
+    return '/api/cameras/' + c.id + '.jpg?v=' + encodeURIComponent(c.version || '');
+  }
+
+  function camSetImage(img, c) {
+    camSetUrl(img, c && c.available !== false ? camImageUrl(c) : '');
+  }
+
+  function camSetUrl(img, url) {
+    if (img.getAttribute('data-url') === url) { return; }  // unchanged: no reload, no flicker
+    img.setAttribute('data-url', url);
+    // A blank picture (not a removed src) is what makes the browser drop a live stream's connection.
+    img.src = url || CAM_BLANK;
+  }
+
+  // Live view (MJPEG in the big <img>): started by opening an RTSP camera, ended by leaving it, by
+  // hiding the page, or after the server's live_max_seconds; then "Resume live" starts a new one.
+  function camStartLive(id) {
+    clearTimer('camLiveTimer');
+    state.camLiveId = id;
+    state.camLiveToken++;
+    state.camLiveEnded = false;
+    var secs = (state.cam && state.cam.live_max_seconds) || 600;
+    state.camLiveTimer = setTimeout(function () {
+      state.camLiveTimer = null;
+      state.camLiveEnded = true;
+      camSetUrl($('cam-big-img'), '');
+      renderCameras();
+    }, secs * 1000);
+  }
+
+  function camStopLive() {
+    clearTimer('camLiveTimer');
+    if (state.camLiveId === null) { return; }
+    state.camLiveId = null;
+    camSetUrl($('cam-big-img'), '');
+  }
+
+  function camMessage(title, body) {
+    camStopLive();
+    setClass($('cam-grid'), 'is-hidden', true);
+    setClass($('cam-detail'), 'is-hidden', true);
+    setClass($('cam-msg'), 'is-hidden', false);
+    setText($('cam-msg-title'), title);
+    setText($('cam-msg-body'), body || '');
+  }
+
+  function renderCameras() {
+    var d = state.cam;
+    if (!d) {
+      camMessage(state.camError ? 'Cameras unavailable' : 'Loading cameras…',
+        state.camError ? state.camError + '. Retrying automatically.' : '');
+      setText($('cam-sub'), '');
+      return;
+    }
+    if (!d.enabled || !d.cameras.length) {
+      camMessage('No cameras', 'Add cameras under "cameras" in config.json.');
+      setText($('cam-sub'), '');
+      return;
+    }
+    var live = [];
+    for (var n = 0; n < d.cameras.length; n++) { if (d.cameras[n].live) { live.push(d.cameras[n].label); } }
+    if (d.ha_ok === false && !live.length) {
+      camMessage('Home Assistant not connected', d.ha_error || 'Check that Home Assistant is running.');
+      setText($('cam-sub'), '');
+      return;
+    }
+    setClass($('cam-msg'), 'is-hidden', true);
+    var moving = [];
+    for (var k = 0; k < d.cameras.length; k++) { if (d.cameras[k].motion) { moving.push(d.cameras[k].label); } }
+    setText($('cam-sub'), (moving.length ? 'Motion: ' + moving.join(', ') : 'No motion') +
+      (live.length ? ' · live: ' + live.join(', ') : ' · snapshots, no live view') +
+      (d.ha_ok === false ? ' · Home Assistant: ' + (d.ha_error || 'not connected') : '') +
+      (state.camError ? ' · offline, showing last data' : ''));
+    setClass($('cam-sub'), 'up-sub-bad', moving.length > 0);
+    var detail = state.camDetail ? camById(state.camDetail) : null;
+    setClass($('cam-grid'), 'is-hidden', !!detail);
+    setClass($('cam-detail'), 'is-hidden', !detail);
+    if (detail) { camRenderDetail(detail); return; }
+    camStopLive();
+    var slots = d.cameras.length > 4 ? CAM_SLOTS_6 : CAM_SLOTS_4;
+    setClass($('cam-grid'), 'cam-grid-3', slots === CAM_SLOTS_6);
+    for (var i = 0; i < CAM_COUNT; i++) {
+      var slot = i < slots.length ? slots[i] : (i === 4 ? 4 : 5);
+      var c = i < slots.length ? d.cameras[i] || null : null;
+      var card = $('cam-card-' + slot);
+      card.className = 'cam-card grow' + (i >= slots.length ? ' is-hidden' : '') +
+        (c ? (c.motion ? ' cam-motion' : '') : ' cam-empty');
+      card.setAttribute('data-id', c ? c.id : '');
+      card.disabled = !c;
+      camSetImage($('cam-img-' + slot), c);
+      var cap = $('cam-cap-' + slot);
+      while (cap.firstChild) { cap.removeChild(cap.firstChild); }
+      if (!c) { continue; }
+      cap.appendChild(el('span', 'cam-name grow', c.label));
+      var badges = camBadges(c);
+      if (badges.length) { cap.appendChild(el('span', 'cam-badge ' + badges[0][1], badges[0][0])); }
+      cap.appendChild(el('span', 'cam-time', camAgo(c.updated_ms)));
+    }
+  }
+
+  function camRenderDetail(c) {
+    var info = $('cam-d-info');
+    while (info.firstChild) { info.removeChild(info.firstChild); }
+    setText($('cam-d-name'), c.label);
+    if (c.live) {
+      if (state.camLiveId !== c.id) { camStopLive(); camStartLive(c.id); }
+      camSetUrl($('cam-big-img'), state.camLiveEnded ? '' :
+        '/api/cameras/' + c.id + '/live.mjpg?t=' + state.camLiveToken);
+      info.appendChild(el('div', 'cam-d-line', state.camLiveEnded ? 'Live view paused' :
+        (c.available ? 'Live' : 'Camera not answering')));
+      if (!c.available && c.error) { info.appendChild(el('div', 'cam-d-line', c.error)); }
+      setText($('cam-snap'), state.camLiveEnded || !c.available ? 'Resume live' : 'Restart live');
+      $('cam-snap').disabled = false;
+      return;
+    }
+    camStopLive();
+    setText($('cam-snap'), 'New snapshot');
+    camSetImage($('cam-big-img'), c);
+    info.appendChild(el('div', 'cam-d-line', c.updated_ms ? 'Picture ' + formatHM(c.updated_ms) + ' (' + camAgo(c.updated_ms) + ')' : 'No picture yet'));
+    if (c.motion_ms) { info.appendChild(el('div', 'cam-d-line', 'Motion ' + camAgo(c.motion_ms))); }
+    var badges = camBadges(c);
+    for (var i = 0; i < badges.length; i++) { info.appendChild(el('span', 'cam-badge ' + badges[i][1], badges[i][0])); }
+    $('cam-snap').disabled = !c.can_snapshot || !c.available;
+  }
+
+  function camOpen(id) {
+    state.camDetail = id;
+    renderCameras();
+  }
+
+  function camSnapshot() {
+    var id = state.camDetail;
+    if (!id) { return; }
+    var cam = camById(id);
+    if (cam && cam.live) { camStartLive(id); renderCameras(); return; }
+    $('cam-snap').disabled = true;
+    aiRequest('POST', '/api/cameras/snapshot', { id: id }, 15000, function (err, data) {
+      if (err || !data || !data.ok) {
+        showToast(data && data.error && data.error.message ? data.error.message : 'Could not reach the server');
+      } else {
+        showToast('Snapshot requested; the picture updates in about 15 s');
+        setTimeout(pollCameras, 8000);
+        setTimeout(pollCameras, 18000);
+      }
+      renderCameras();
+    });
+  }
+
+  // A new motion alert jumps to that camera for popup_seconds, then returns to the previous tab
+  // unless someone touched the screen meanwhile.
+  function camCheckAlert() {
+    var a = state.cam && state.cam.alert;
+    if (!a || a.key === state.camAlertSeen || !camById(a.id)) { return; }
+    state.camAlertSeen = a.key;
+    if (state.camReturnView === null) { state.camReturnView = VIEWS[currentView].id; }
+    state.camTouched = false;
+    setOverlay('jump', false);
+    setOverlay('more', false);
+    showView('cameras');
+    camOpen(a.id);
+    clearTimer('camPopupTimer');
+    state.camPopupTimer = setTimeout(function () {
+      state.camPopupTimer = null;
+      var back = state.camReturnView;
+      state.camReturnView = null;
+      if (!state.camTouched && back && back !== 'cameras') { showView(back); }
+    }, Math.max(10, state.cam.popup_seconds || 60) * 1000);
   }
 
   // ---- uptime (Kuma monitors, then home services; polled only while the tab is visible) ----
@@ -1526,6 +1971,8 @@
     pollCalendar();
     mapsSync();
     uptimeSync();
+    homeSync();
+    camerasSync();
   }
 
   // ---- startup ----
@@ -1581,6 +2028,27 @@
     $('ai-clear').addEventListener('click', aiClear, false);
     $('ai-voice').addEventListener('click', voiceClick, false);
     $('ai-voice-file').addEventListener('change', voiceFileChosen, false);
+    for (var t = 0; t < HOME_PER_PAGE; t++) {
+      $('hc-tile-' + t).addEventListener('click', function () { homePress(this.getAttribute('data-id')); }, false);
+    }
+    for (var c = 0; c < CAM_COUNT; c++) {  // card ids 0-5; data-id says which camera
+      $('cam-card-' + c).addEventListener('click', function () { camOpen(this.getAttribute('data-id')); }, false);
+    }
+    $('cam-back').addEventListener('click', function () { state.camDetail = null; renderCameras(); }, false);
+    $('cam-snap').addEventListener('click', camSnapshot, false);
+    // Any touch during a motion pop-up keeps the tablet where the person left it.
+    document.addEventListener('click', function () { state.camTouched = true; state.camReturnView = null; }, true);
+    $('hc-prev').addEventListener('click', function () { state.hcPage--; renderHome(); }, false);
+    $('hc-next').addEventListener('click', function () { state.hcPage++; renderHome(); }, false);
+    $('hc-yes').addEventListener('click', overlayTap(function () {
+      setOverlay('hc-confirm', false);
+      if (state.hcConfirmId) { homeSend(state.hcConfirmId); }
+      state.hcConfirmId = null;
+    }), false);
+    $('hc-no').addEventListener('click', overlayTap(function () {
+      setOverlay('hc-confirm', false);
+      state.hcConfirmId = null;
+    }), false);
     $('up-prev').addEventListener('click', function () { state.upPage--; renderUptime(); }, false);
     $('up-next').addEventListener('click', function () { state.upPage++; renderUptime(); }, false);
     $('ai-prev').addEventListener('click', function () { aiShowPage(ai.page - 1); }, false);
@@ -1598,12 +2066,16 @@
     updateFullscreenButton();
 
     document.addEventListener('visibilitychange', onBecameVisible, false);
+    // A hidden page (screen off, other app) must not keep a camera stream open.
+    document.addEventListener('visibilitychange', function () { if (isHidden()) { camStopLive(); } }, false);
+    document.addEventListener('webkitvisibilitychange', function () { if (isHidden()) { camStopLive(); } }, false);
     document.addEventListener('webkitvisibilitychange', onBecameVisible, false);
     window.addEventListener('pageshow', onBecameVisible, false);
     window.addEventListener('focus', onBecameVisible, false);
 
     var hash = String(window.location.hash || '').replace('#', '');
-    if (hash === 'weather' || hash === 'maps' || hash === 'cameras' || hash === 'calendar' || hash === 'assistant') {
+    if (hash === 'weather' || hash === 'home' || hash === 'maps' || hash === 'cameras' || hash === 'calendar' ||
+        hash === 'uptime' || hash === 'assistant') {
       showView(hash);  // lets a bookmark open a given tab, e.g. /#assistant
     }
 
@@ -1613,6 +2085,7 @@
     renderWeather();
     pollCalendar();
     mapsSync();
+    camerasSync();
     $('wx-map').addEventListener('click', function () { showView('maps'); }, false);
     window.addEventListener('resize', homeMapFit, false);
     tick();

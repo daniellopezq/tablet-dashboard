@@ -11,6 +11,55 @@ that period.
 
 ---
 
+Versions 0.12.0 to 0.14.0 were developed on the author's own server and published together.
+
+## 0.14.0 (2026-10-20): live view of local RTSP cameras
+
+**Added**
+- **RTSP cameras** (`"type": "rtsp"` in `cameras.list`), read straight from the LAN with no Home Assistant or cloud,
+  e.g. a V380 with ONVIF turned on in its app.
+- **Live view:** tap the camera for live video as MJPEG in an `<img>`, which works on old browsers like Chrome 50.
+  **Restart live** reconnects; the view pauses after `live_max_seconds` (600) with **Resume live**, and the stream is
+  dropped when you leave the camera, change tabs or the page is hidden.
+- `LiveFeed` in `cameras.py`: one ffmpeg per camera (H.264 to MJPEG at `live_fps`), started on demand, shared by every
+  viewer and the grid still, stopped 15 s after the last viewer, with a 5 s back-off after a failure.
+- `GET /api/cameras/<id>/live.mjpg` (LAN only, at most 4 viewers per camera).
+- Settings `cameras.ffmpeg_path`, `still_seconds`, `live_idle_seconds`, `live_max_seconds`. `rtsp_url` must be rtsp://
+  with no credentials or query.
+
+**Changed**
+- The Cameras grid holds up to 6 cameras: 2x2 for up to 4, 3x2 for 5-6.
+- Without Home Assistant the tab still shows RTSP cameras instead of a full-page "not connected".
+
+## 0.13.0 (2026-10-20): Home Assistant cameras, arm/disarm and motion pop-ups
+
+**Added**
+- **Cameras tab** (was a placeholder): the latest snapshot of each Home Assistant camera (e.g. Blink) with a badge
+  (MOTION, BATTERY LOW, MOTION OFF, OFFLINE). Tap one for the full-size picture and **New snapshot**.
+- **Motion pop-up:** when a camera with `"popup": true` reports new motion, the tablet jumps to it from any tab and
+  goes back after `popup_seconds` unless someone touched the screen.
+- `cameras.py`: camera status from HA's states, an image proxy through `/api/camera_proxy` (the HA token never reaches
+  the tablet), and a rate-limited New snapshot.
+- `GET /api/cameras`, `GET /api/cameras/<id>.jpg`, `POST /api/cameras/snapshot` (LAN only).
+- Home buttons can use `on_service` + `off_service` chosen by the current state (e.g. an alarm panel).
+- Icons `shield` and `motion`.
+
+## 0.12.0 (2026-10-20): Home tab: Home Assistant buttons
+
+**Added**
+- **Home** tab: one large tile per button, 8 per page. Lights and plugs show ON/OFF from Home Assistant and toggle with
+  one tap.
+- `home.py`: Home Assistant REST client (one `GET /api/states` per poll, `POST /api/services/...`), 5 s timeouts, and an
+  optional, advanced Plex/Jellyfin switch through your own root-owned `media-switch` script and a sudoers rule.
+- `GET /api/home` and `POST /api/home/action` (LAN only, same-origin, JSON ≤ 1 KB, 2 s debounce per button,
+  120 presses per hour).
+- Admin page: **Home Assistant long-lived token** (`HA_TOKEN`) under API keys, with a Test button.
+- `config.example.json`: generic `home` and `cameras` examples.
+- Icons `home`, `media`, `fan`, `plug`, `light`.
+
+**Changed**
+- Health checks skip a media server that the switch turned off on purpose.
+
 Versions 0.7.0 to 0.10.0 were developed on the author's own server and published together in this release.
 
 ## 0.11.0 (2026-10-20): Uptime section on the tablet

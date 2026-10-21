@@ -18,7 +18,7 @@
     <button type="button" class="nav-current" id="nav-current">
       <img id="nav-current-icon" src="icons/partly.svg" alt="">
       <span class="nav-current-name" id="nav-current-name">Weather</span>
-      <span class="nav-current-pos" id="nav-current-pos">1 / 5</span>
+      <span class="nav-current-pos" id="nav-current-pos">1 / 7</span>
     </button>
     <button type="button" class="step-btn grow" id="nav-next">Next<span class="step-arrow">&#9660;</span></button>
     <button type="button" class="tool-btn more-btn" id="btn-more">More&hellip;</button>
@@ -73,6 +73,39 @@
       </div>
     </section>
 
+    <section class="view col" id="view-home">
+      <div class="cal-head row">
+        <strong class="cal-title">Home</strong>
+        <span class="cal-sub grow" id="hc-sub"></span>
+      </div>
+      <div class="up-body row grow">
+        <div class="hc-grid col grow" id="hc-grid">
+          <div class="hc-row row grow">
+            <button type="button" class="hc-tile col grow" id="hc-tile-0"></button>
+            <button type="button" class="hc-tile col grow" id="hc-tile-1"></button>
+            <button type="button" class="hc-tile col grow" id="hc-tile-2"></button>
+            <button type="button" class="hc-tile col grow" id="hc-tile-3"></button>
+          </div>
+          <div class="hc-row row grow">
+            <button type="button" class="hc-tile col grow" id="hc-tile-4"></button>
+            <button type="button" class="hc-tile col grow" id="hc-tile-5"></button>
+            <button type="button" class="hc-tile col grow" id="hc-tile-6"></button>
+            <button type="button" class="hc-tile col grow" id="hc-tile-7"></button>
+          </div>
+        </div>
+        <div class="placeholder col grow is-hidden" id="hc-msg">
+          <img src="icons/home.svg" alt="">
+          <h2 id="hc-msg-title">Loading&hellip;</h2>
+          <p id="hc-msg-body"></p>
+        </div>
+        <div class="ai-pager col is-hidden" id="hc-pager">
+          <button type="button" class="ai-page-btn grow" id="hc-prev">&#9650; Back</button>
+          <div class="ai-page-num" id="hc-page">1 / 1</div>
+          <button type="button" class="ai-page-btn grow" id="hc-next">Next &#9660;</button>
+        </div>
+      </div>
+    </section>
+
     <section class="view col" id="view-maps">
       <div class="map-head row">
         <strong class="map-title" id="map-title">Maps</strong>
@@ -88,10 +121,35 @@
     </section>
 
     <section class="view col" id="view-cameras">
-      <div class="placeholder col grow">
+      <div class="cal-head row">
+        <strong class="cal-title">Cameras</strong>
+        <span class="cal-sub grow" id="cam-sub"></span>
+      </div>
+      <div class="cam-grid col grow" id="cam-grid">
+          <div class="cam-row row grow">
+            <button type="button" class="cam-card grow" id="cam-card-0"><img class="cam-img" id="cam-img-0" alt=""><span class="cam-cap row" id="cam-cap-0"></span></button>
+            <button type="button" class="cam-card grow" id="cam-card-1"><img class="cam-img" id="cam-img-1" alt=""><span class="cam-cap row" id="cam-cap-1"></span></button>
+            <button type="button" class="cam-card grow is-hidden" id="cam-card-4"><img class="cam-img" id="cam-img-4" alt=""><span class="cam-cap row" id="cam-cap-4"></span></button>
+          </div>
+          <div class="cam-row row grow">
+            <button type="button" class="cam-card grow" id="cam-card-2"><img class="cam-img" id="cam-img-2" alt=""><span class="cam-cap row" id="cam-cap-2"></span></button>
+            <button type="button" class="cam-card grow" id="cam-card-3"><img class="cam-img" id="cam-img-3" alt=""><span class="cam-cap row" id="cam-cap-3"></span></button>
+            <button type="button" class="cam-card grow is-hidden" id="cam-card-5"><img class="cam-img" id="cam-img-5" alt=""><span class="cam-cap row" id="cam-cap-5"></span></button>
+          </div>
+      </div>
+      <div class="cam-detail row grow is-hidden" id="cam-detail">
+        <div class="cam-big grow"><img class="cam-big-img" id="cam-big-img" alt=""></div>
+        <div class="cam-side col">
+          <div class="cam-side-name" id="cam-d-name"></div>
+          <div class="cam-side-info grow" id="cam-d-info"></div>
+          <button type="button" class="ai-page-btn grow" id="cam-snap">New snapshot</button>
+          <button type="button" class="ai-page-btn grow cam-back" id="cam-back">&#9664; All cameras</button>
+        </div>
+      </div>
+      <div class="placeholder col grow is-hidden" id="cam-msg">
         <img src="icons/camera.svg" alt="">
-        <h2>Camera connection pending</h2>
-        <p>No cameras have been connected yet.</p>
+        <h2 id="cam-msg-title">Loading cameras&hellip;</h2>
+        <p id="cam-msg-body"></p>
       </div>
     </section>
 
@@ -193,6 +251,7 @@
     </div>
     <div class="jump-row row grow">
       <button type="button" class="jump-tile grow" data-view="weather"><img src="icons/partly.svg" alt="">Weather</button>
+      <button type="button" class="jump-tile grow" data-view="home"><img src="icons/home.svg" alt="">Home</button>
       <button type="button" class="jump-tile grow" data-view="maps"><img src="icons/map.svg" alt="">Maps</button>
       <button type="button" class="jump-tile grow" data-view="cameras"><img src="icons/camera.svg" alt="">Cameras</button>
     </div>
@@ -200,6 +259,18 @@
       <button type="button" class="jump-tile grow" data-view="calendar"><img src="icons/calendar.svg" alt="">Calendar</button>
       <button type="button" class="jump-tile grow" data-view="uptime"><img src="icons/uptime.svg" alt="">Uptime</button>
       <button type="button" class="jump-tile grow" data-view="assistant"><img src="icons/assistant.svg" alt="">Ask</button>
+    </div>
+  </div>
+
+  <!-- Home tab: confirm before a disruptive button (e.g. stopping Plex) -->
+  <div class="overlay col is-hidden" id="hc-confirm">
+    <div class="overlay-head row">
+      <strong class="grow" id="hc-confirm-title">Are you sure?</strong>
+    </div>
+    <p class="hc-confirm-body" id="hc-confirm-body"></p>
+    <div class="jump-row row grow">
+      <button type="button" class="jump-tile grow hc-yes" id="hc-yes">Yes</button>
+      <button type="button" class="jump-tile grow" id="hc-no">Cancel</button>
     </div>
   </div>
 

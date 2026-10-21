@@ -61,5 +61,71 @@
     "stt_model": "ggml-base.bin",
     "stt_backend": "vulkan",
     "threads": 2
+  },
+  "home": {
+    "_comment": "Home tab (optional). kind 'ha' calls a Home Assistant service; the token is HA_TOKEN in .env (admin page -> API keys). Entity ids: HA -> Settings -> Entities. kind 'media_switch' (advanced, optional) swaps Plex/Jellyfin through your own root-owned /usr/local/sbin/media-switch and a sudoers rule; see README.",
+    "enabled": true,
+    "ha_url": "http://127.0.0.1:8123",
+    "buttons": [
+      {
+        "id": "movie",
+        "label": "Movie night",
+        "kind": "ha",
+        "icon": "media",
+        "service": "script.turn_on",
+        "entity_id": "script.movie_night"
+      },
+      {
+        "id": "lamp",
+        "label": "Lamp",
+        "kind": "ha",
+        "icon": "light",
+        "service": "light.toggle",
+        "entity_id": "light.living_room_lamp",
+        "state_entity": "light.living_room_lamp"
+      },
+      {
+        "id": "fan",
+        "label": "Fan",
+        "kind": "ha",
+        "icon": "fan",
+        "service": "switch.toggle",
+        "entity_id": "switch.bedroom_fan",
+        "state_entity": "switch.bedroom_fan"
+      },
+      {
+        "id": "alarm",
+        "label": "Alarm",
+        "kind": "ha",
+        "icon": "shield",
+        "on_service": "alarm_control_panel.alarm_arm_away",
+        "off_service": "alarm_control_panel.alarm_disarm",
+        "entity_id": "alarm_control_panel.home",
+        "state_entity": "alarm_control_panel.home",
+        "confirm": true
+      }
+    ]
+  },
+  "cameras": {
+    "_comment": "Cameras tab (optional, up to 6). type 'ha' (default): a Home Assistant camera (e.g. Blink: snapshots only); popup jumps to it when its motion sensor turns on. type 'rtsp': a local camera with live view (e.g. V380 with ONVIF turned on in its app); ffmpeg turns the stream into MJPEG only while someone watches. Use the camera's sub-stream. No user:password in rtsp_url.",
+    "enabled": true,
+    "popup_seconds": 60,
+    "list": [
+      {
+        "id": "door",
+        "label": "Front door",
+        "entity_id": "camera.front_door",
+        "motion_entity": "binary_sensor.front_door_motion",
+        "battery_entity": "binary_sensor.front_door_battery",
+        "popup": true
+      },
+      {
+        "id": "garage",
+        "label": "Garage",
+        "type": "rtsp",
+        "rtsp_url": "rtsp://192.168.1.20:554/live/ch00_1",
+        "live_fps": 10
+      }
+    ]
   }
 }

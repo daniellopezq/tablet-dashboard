@@ -37,7 +37,8 @@ Give a drawer tablet a second life as a useful wall/desk display that:
 | Voice | Groq `whisper-large-v3-turbo` | One tap records, silence ends the recording, then the question is asked automatically |
 | Local fallback | Qwen3.5-2B on CPU, whisper base on GPU | Takes over Ask and Voice only when the cloud doesn't respond at all |
 | Admin page | `https://<server>:8443/admin`, LAN only | Password sign-in; API keys, AI models (cloud and local), Google sign-in, health and Uptime Kuma, settings, logs, maintenance, offline test switch |
-| Cameras | none yet | Placeholder |
+| Home | Home Assistant (your own, e.g. in Docker) + optional media switch | One tile per light/plug (ON/OFF, one tap); optional Plex/Jellyfin switch with confirm (0.12.0) |
+| Cameras | Home Assistant cameras (e.g. Blink); local RTSP cameras (ffmpeg → MJPEG) | HA cameras: latest snapshot, New snapshot, motion pop-up from any tab (0.13.0). RTSP cameras (e.g. V380): live view, works without internet; ffmpeg runs only while someone watches (0.14.0) |
 
 ## 4. Architecture
 

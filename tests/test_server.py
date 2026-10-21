@@ -198,6 +198,105 @@ class StaticAndApiTests(DashboardTestCase):
         for key in ("enabled", "checks", "counts", "last_run_ms", "kuma_ok"):
             self.assertIn(key, data)
 
+
+class HomeRouteTests(DashboardTestCase):
+    """/api/home and /api/home/action, with a fake systemctl/sudo so nothing is switched."""
+
+    def setUp(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
+        from test_home import FakeSystem
+        app = self.make_app()
+        self.system = FakeSystem("plex")
+        app.home.runner = self.system
+        self.app = app
+        self.port = self.serve(app)
+
+    def post(self, body, headers=None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        h = {"Content-Type": "application/json"}
+        h.update(headers or {})
+        conn.request("POST", "/api/home/action", body=body, headers=h)
+        resp = conn.getresponse()
+        data = resp.read()
+        conn.close()
+        return resp.status, json.loads(data or b"null")
+
+    def test_status(self):
+        resp, body = self.request(self.port, "/api/home")
+        self.assertEqual(resp.status, 200)
+        data = json.loads(body)
+        self.assertTrue(data["enabled"])
+        self.assertEqual(data["buttons"][0]["media"]["current"], "plex")
+
+    def test_switch(self):
+        status, data = self.post(b'{"id": "media"}')
+        self.assertEqual((status, data["pending"], data["target"]), (200, True, "jellyfin"))
+        self.app.home._thread.join(5)
+        self.assertIn(["sudo", "-n", "/usr/local/sbin/media-switch", "jellyfin"], self.system.calls)
+
+    def test_rejections(self):
+        self.assertEqual(self.post(b'{"id": "nope"}')[0], 404)
+        self.assertEqual(self.post(b'not json')[0], 400)
+        self.assertEqual(self.post(b'{"id": "media"}', {"Content-Type": "text/plain"})[0], 415)
+        self.assertEqual(self.post(b'{"id": "media"}', {"Host": "evil.example"})[0], 403)
+        self.assertEqual(self.post(b"x" * 2000)[0], 413)
+        self.assertEqual(self.system.calls.count(["sudo", "-n", "/usr/local/sbin/media-switch", "jellyfin"]), 0)
+
+    def test_camera_routes(self):
+        resp, body = self.request(self.port, "/api/cameras")
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(json.loads(body)["cameras"], [])  # none configured in the default config
+        for path in ("/api/cameras/nope.jpg", "/api/cameras/../x.jpg", "/api/cameras/a.png"):
+            resp, _ = self.request(self.port, path)
+            self.assertEqual(resp.status, 404, path)
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("POST", "/api/cameras/snapshot", body=b'{"id": "nope"}',
+                     headers={"Content-Type": "application/json"})
+        self.assertEqual(conn.getresponse().status, 404)
+        conn.close()
+
+    def test_camera_live_route(self):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import cameras
+        from test_cameras import RTSP_CAM, make_fake_ffmpeg, set_mode
+        tmp = tempfile.mkdtemp(prefix="cam-live-")
+        self.addCleanup(shutil.rmtree, tmp)
+        cfg = json.loads(json.dumps(cameras.DEFAULT_CAMERAS_CONFIG))
+        cfg.update(ffmpeg_path=make_fake_ffmpeg(tmp), list=[dict(RTSP_CAM)])
+        cameras.validate_cameras_config(cfg)
+        self.app.cameras = cameras.Cameras(cfg, None)
+        self.addCleanup(self.app.cameras.close)
+
+        resp, body = self.request(self.port, "/api/cameras")
+        self.assertTrue(json.loads(body)["cameras"][0]["live"])
+        resp, body = self.request(self.port, "/api/cameras/v380.jpg?v=s1")
+        self.assertEqual((resp.status, body[:2]), (200, b"\xff\xd8"))
+
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("GET", "/api/cameras/v380/live.mjpg?t=1")
+        resp = conn.getresponse()
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.getheader("Content-Type"), "multipart/x-mixed-replace; boundary=frame")
+        data = b""
+        while data.count(b"--frame") < 3:
+            data += resp.read1(4096)
+        self.assertIn(b"Content-Type: image/jpeg\r\nContent-Length: ", data)
+        resp.close()  # the viewer leaves; the server must let go of it
+        conn.close()
+        feed = self.app.cameras._feeds["v380"]
+        end = time.monotonic() + 5
+        while feed._viewers and time.monotonic() < end:
+            time.sleep(0.05)
+        self.assertEqual(feed._viewers, 0)
+
+        resp, body = self.request(self.port, "/api/cameras/sala/live.mjpg")
+        self.assertEqual(resp.status, 404)
+        feed.stop()
+        set_mode(tmp, "fail")
+        resp, body = self.request(self.port, "/api/cameras/v380/live.mjpg")
+        self.assertEqual(resp.status, 502)
+        self.assertIn("Connection refused", json.loads(body)["error"])
+
 class MediaTests(DashboardTestCase):
     def setUp(self):
         self.port = self.serve(self.make_app())

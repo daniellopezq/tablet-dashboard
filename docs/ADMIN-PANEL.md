@@ -116,7 +116,7 @@ The built-in checks come from `AdminService.builtin_checks()`:
 - the https certificate: warn under 30 days, fail when expired
 - the offline switch: warn while it is on
 
-On top of those come the `health.targets` checks and the Kuma monitors. Each check keeps its state (`ok`, `warn`, `fail`, `unknown`), the time it last changed, and a history string (one letter per run: `o`, `w`, `f`, `u`) covering about 24 h. History is kept in memory only.
+On top of those come the `health.targets` checks and the Kuma monitors. Since 0.12.0, a target whose name is the media server switched off on purpose from the Home tab (`Home.intentionally_stopped()`, e.g. Jellyfin while Plex runs) is skipped instead of reported down. The API keys page also lists `HA_TOKEN` (Home Assistant long-lived token); its Test button calls HA's `GET /api/`. Each check keeps its state (`ok`, `warn`, `fail`, `unknown`), the time it last changed, and a history string (one letter per run: `o`, `w`, `f`, `u`) covering about 24 h. History is kept in memory only.
 
 Example targets: a media server (`tcp`, port 32400), a file share (`tcp`, port 445), or a web app (`http`). With Kuma enabled, every monitor of your Kuma instance is listed too.
 
