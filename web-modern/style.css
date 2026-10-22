@@ -339,6 +339,25 @@ a.card-title:hover { color: var(--text); }
 .cam-detail-head .view-title { margin: 0; }
 .cam-big-frame { background: #000; border-radius: 12px; overflow: hidden; aspect-ratio: 16 / 9; }
 .cam-big { width: 100%; height: 100%; object-fit: contain; display: block; }
+.cam-ptz {
+  position: absolute; width: 52px; height: 52px; border-radius: 50%; border: 2px solid rgb(255 255 255 / .35);
+  background: rgb(0 0 0 / .45); color: #fff; font: inherit; font-size: 20px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.cam-ptz[hidden] { display: none; }
+.cam-ptz:hover:not(:disabled) { background: rgb(0 0 0 / .65); }
+.cam-ptz:active:not(:disabled) { background: var(--accent-strong); }
+.cam-ptz:disabled { opacity: .4; cursor: default; }
+.cam-ptz-up { top: 10px; left: calc(50% - 26px); }
+.cam-ptz-down { bottom: 10px; left: calc(50% - 26px); }
+.cam-ptz-left { left: 10px; top: calc(50% - 26px); }
+.cam-ptz-right { right: 10px; top: calc(50% - 26px); }
+.cam-ctl { display: flex; gap: 12px 20px; flex-wrap: wrap; }
+.cam-ctl[hidden] { display: none; }
+.cam-ctl .chip { cursor: pointer; font: inherit; }
+.cam-ctl .chip:disabled { opacity: .5; cursor: default; }
+.cam-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.cam-actions .btn[hidden] { display: none; }
 .cam-detail-foot { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .cam-info { display: flex; flex-direction: column; gap: 2px; }
 .cam-frame, .cam-big-frame { position: relative; }

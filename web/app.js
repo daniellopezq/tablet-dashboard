@@ -102,6 +102,11 @@
     camLiveToken: 0,          // changes on every (re)start, so the <img> opens a new stream
     camLiveEnded: false,      // the live view reached live_max_seconds or failed
     camLiveTimer: null,
+    camHd: false,             // live view from the camera's HD stream (tablet default: SD)
+    camMode: null,            // day/night mode of the open camera: 'day', 'night', 'auto' or null
+    camModeFor: null,         // camera id camMode belongs to
+    camMoving: false,
+    camBlinkLive: null,       // Blink camera whose on-demand live view was asked for, or null
     loadedLocal: Date.now(),
     serverVersion: ''
   };
@@ -1137,7 +1142,7 @@
     }
     if (name === 'assistant') { aiLoadStatus(); aiRender(); aiPaginate(); }
     if (name === 'calendar') { renderCalendar(); pollCalendar(); }
-    if (name === 'cameras') { renderCameras(); } else { state.camDetail = null; camStopLive(); }
+    if (name === 'cameras') { renderCameras(); } else { state.camDetail = null; camEndLive(); }
     mapsSync();
     uptimeSync();
     homeSync();
@@ -1433,6 +1438,13 @@
     }, secs * 1000);
   }
 
+  // Leaving a camera (or hiding the page) also forgets an on-demand Blink live view, so it isn't
+  // started again by itself: each start is a Blink cloud session.
+  function camEndLive() {
+    state.camBlinkLive = null;
+    camStopLive();
+  }
+
   function camStopLive() {
     clearTimer('camLiveTimer');
     if (state.camLiveId === null) { return; }
@@ -1507,18 +1519,21 @@
     var info = $('cam-d-info');
     while (info.firstChild) { info.removeChild(info.firstChild); }
     setText($('cam-d-name'), c.label);
-    if (c.live) {
+    if (c.live || state.camBlinkLive === c.id) {
       if (state.camLiveId !== c.id) { camStopLive(); camStartLive(c.id); }
       camSetUrl($('cam-big-img'), state.camLiveEnded ? '' :
-        '/api/cameras/' + c.id + '/live.mjpg?t=' + state.camLiveToken);
+        '/api/cameras/' + c.id + '/live.mjpg?t=' + state.camLiveToken + (state.camHd && c.hd ? '&q=hd' : ''));
+      camRenderControls(c);
       info.appendChild(el('div', 'cam-d-line', state.camLiveEnded ? 'Live view paused' :
         (c.available ? 'Live' : 'Camera not answering')));
       if (!c.available && c.error) { info.appendChild(el('div', 'cam-d-line', c.error)); }
+      if (c.live_error) { info.appendChild(el('div', 'cam-d-line', c.live_error)); }
       setText($('cam-snap'), state.camLiveEnded || !c.available ? 'Resume live' : 'Restart live');
       $('cam-snap').disabled = false;
       return;
     }
     camStopLive();
+    camRenderControls(c);
     setText($('cam-snap'), 'New snapshot');
     camSetImage($('cam-big-img'), c);
     info.appendChild(el('div', 'cam-d-line', c.updated_ms ? 'Picture ' + formatHM(c.updated_ms) + ' (' + camAgo(c.updated_ms) + ')' : 'No picture yet'));
@@ -1528,8 +1543,88 @@
     $('cam-snap').disabled = !c.can_snapshot || !c.available;
   }
 
+  // Pan/tilt arrows, HD/SD and day/night for live cameras that have them; null hides them all.
+  var CAM_MODE_NEXT = { auto: 'night', night: 'day', day: 'auto' };
+  var CAM_MODE_TEXT = { auto: 'Auto', night: 'Night', day: 'Day' };
+
+  function camRenderControls(c) {
+    var rtsp = !!(c && c.live);  // pan/tilt, HD and day/night are for local live cameras
+    var dirs = ['up', 'down', 'left', 'right'];
+    for (var i = 0; i < dirs.length; i++) {
+      var b = $('cam-ptz-' + dirs[i]);
+      setClass(b, 'is-hidden', !(rtsp && c.ptz));
+      b.disabled = state.camMoving;
+    }
+    setClass($('cam-ctl'), 'is-hidden', !(c && ((rtsp && (c.hd || c.day_night)) || c.can_live)));
+    if (!c) { return; }
+    setClass($('cam-live'), 'is-hidden', !c.can_live);
+    setText($('cam-live'), state.camBlinkLive === c.id ? 'Stop' : 'Live');
+    setClass($('cam-hd'), 'is-hidden', !(rtsp && c.hd));
+    setText($('cam-hd'), state.camHd ? 'HD' : 'SD');
+    setClass($('cam-mode'), 'is-hidden', !(rtsp && c.day_night));
+    if (rtsp && c.day_night && state.camModeFor !== c.id) {
+      state.camModeFor = c.id;
+      state.camMode = null;
+      aiRequest('GET', '/api/cameras/' + c.id + '/controls', null, 8000, function (err, data) {
+        if (!err && data && state.camModeFor === c.id) { state.camMode = data.mode || null; renderCameras(); }
+      });
+    }
+    setText($('cam-mode'), CAM_MODE_TEXT[state.camMode] || '…');
+  }
+
+  function camMove(dir) {
+    var id = state.camDetail;
+    if (!id || state.camMoving) { return; }
+    state.camMoving = true;
+    renderCameras();
+    aiRequest('POST', '/api/cameras/control', { id: id, move: dir }, 10000, function (err, data) {
+      state.camMoving = false;
+      if (err || !data || !data.ok) {
+        showToast(data && data.error && data.error.message ? data.error.message : 'Could not reach the server');
+      }
+      renderCameras();
+    });
+  }
+
+  function camToggleBlinkLive() {
+    var id = state.camDetail;
+    if (!id) { return; }
+    if (state.camBlinkLive === id) {
+      camEndLive();
+    } else {
+      state.camBlinkLive = id;
+      showToast('Starting live view; Blink takes a few seconds');
+    }
+    renderCameras();
+  }
+
+  function camToggleHd() {
+    state.camHd = !state.camHd;
+    renderCameras();
+  }
+
+  function camNextMode() {
+    var id = state.camDetail;
+    if (!id) { return; }
+    var mode = CAM_MODE_NEXT[state.camMode] || 'auto';
+    $('cam-mode').disabled = true;
+    aiRequest('POST', '/api/cameras/control', { id: id, mode: mode }, 10000, function (err, data) {
+      $('cam-mode').disabled = false;
+      if (err || !data || !data.ok) {
+        showToast(data && data.error && data.error.message ? data.error.message : 'Could not reach the server');
+      } else {
+        state.camMode = data.mode;
+        state.camModeFor = id;
+        showToast(mode === 'night' ? 'Night mode: infrared, black and white' :
+          mode === 'day' ? 'Day mode: colour' : 'Auto: the camera picks day or night');
+      }
+      renderCameras();
+    });
+  }
+
   function camOpen(id) {
     state.camDetail = id;
+    state.camBlinkLive = null;
     renderCameras();
   }
 
@@ -1537,7 +1632,7 @@
     var id = state.camDetail;
     if (!id) { return; }
     var cam = camById(id);
-    if (cam && cam.live) { camStartLive(id); renderCameras(); return; }
+    if (cam && (cam.live || state.camBlinkLive === id)) { camStartLive(id); renderCameras(); return; }
     $('cam-snap').disabled = true;
     aiRequest('POST', '/api/cameras/snapshot', { id: id }, 15000, function (err, data) {
       if (err || !data || !data.ok) {
@@ -2036,6 +2131,13 @@
     }
     $('cam-back').addEventListener('click', function () { state.camDetail = null; renderCameras(); }, false);
     $('cam-snap').addEventListener('click', camSnapshot, false);
+    var ptzDirs = ['up', 'down', 'left', 'right'];
+    for (var p = 0; p < ptzDirs.length; p++) {
+      $('cam-ptz-' + ptzDirs[p]).addEventListener('click', function () { camMove(this.getAttribute('data-dir')); }, false);
+    }
+    $('cam-hd').addEventListener('click', camToggleHd, false);
+    $('cam-live').addEventListener('click', camToggleBlinkLive, false);
+    $('cam-mode').addEventListener('click', camNextMode, false);
     // Any touch during a motion pop-up keeps the tablet where the person left it.
     document.addEventListener('click', function () { state.camTouched = true; state.camReturnView = null; }, true);
     $('hc-prev').addEventListener('click', function () { state.hcPage--; renderHome(); }, false);
@@ -2067,8 +2169,8 @@
 
     document.addEventListener('visibilitychange', onBecameVisible, false);
     // A hidden page (screen off, other app) must not keep a camera stream open.
-    document.addEventListener('visibilitychange', function () { if (isHidden()) { camStopLive(); } }, false);
-    document.addEventListener('webkitvisibilitychange', function () { if (isHidden()) { camStopLive(); } }, false);
+    document.addEventListener('visibilitychange', function () { if (isHidden()) { camEndLive(); } }, false);
+    document.addEventListener('webkitvisibilitychange', function () { if (isHidden()) { camEndLive(); } }, false);
     document.addEventListener('webkitvisibilitychange', onBecameVisible, false);
     window.addEventListener('pageshow', onBecameVisible, false);
     window.addEventListener('focus', onBecameVisible, false);

@@ -107,14 +107,16 @@
     ]
   },
   "cameras": {
-    "_comment": "Cameras tab (optional, up to 6). type 'ha' (default): a Home Assistant camera (e.g. Blink: snapshots only); popup jumps to it when its motion sensor turns on. type 'rtsp': a local camera with live view (e.g. V380 with ONVIF turned on in its app); ffmpeg turns the stream into MJPEG only while someone watches. Use the camera's sub-stream. No user:password in rtsp_url.",
+    "_comment": "Cameras tab (optional, up to 6). type 'ha' (default): a Home Assistant camera (e.g. Blink: snapshots); popup jumps to it when its motion sensor turns on; blink_live (the camera's name in a Blink live-view proxy) adds an on-demand live view through that proxy at blink_proxy_url (token: BLINK_PROXY_TOKEN in .env); without a proxy, set blink_proxy_url to \"\" and drop blink_live. type 'rtsp': a local camera with live view (e.g. V380 with ONVIF turned on in its app); ffmpeg turns the stream into MJPEG only while someone watches. rtsp_url is the sub-stream (SD), rtsp_url_hd the main stream; onvif_url adds pan/tilt and day/night; mac lets the server find the camera again if its address changes. No user:password in URLs.",
     "enabled": true,
     "popup_seconds": 60,
+    "blink_proxy_url": "http://127.0.0.1:8088",
     "list": [
       {
         "id": "door",
         "label": "Front door",
         "entity_id": "camera.front_door",
+        "blink_live": "front_door",
         "motion_entity": "binary_sensor.front_door_motion",
         "battery_entity": "binary_sensor.front_door_battery",
         "popup": true
@@ -124,6 +126,9 @@
         "label": "Garage",
         "type": "rtsp",
         "rtsp_url": "rtsp://192.168.1.20:554/live/ch00_1",
+        "rtsp_url_hd": "rtsp://192.168.1.20:554/live/ch00_0",
+        "onvif_url": "http://192.168.1.20:8899/onvif/device_service",
+        "mac": "00:00:5e:00:53:01",
         "live_fps": 10
       }
     ]

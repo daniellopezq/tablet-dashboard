@@ -154,6 +154,8 @@ button {
   text-align: center;
   z-index: 20;
 }
+/* "Go to" header: link to the modern view (a PC that got the classic view, e.g. after "Classic view") */
+.ui-switch { display: inline-block; margin-right: 12px; padding: 0 14px; line-height: 50px; color: #e8edf2; text-decoration: none; text-align: center; box-sizing: border-box; }
 .tool-btn:active, .step-btn:active, .nav-current:active, .jump-tile:active, .overlay-close:active { background: #263445; }
 
 .main { position: relative; overflow: hidden; }
@@ -618,6 +620,30 @@ button {
 .cam-side .ai-page-btn { max-height: 90px; }
 .cam-side .ai-page-btn + .ai-page-btn { margin-top: 10px; }
 .cam-back { background: #1b2430; border-color: #30363d; }
+/* Pan/tilt arrows over the live picture (cameras with "onvif_url") */
+.cam-ptz {
+  position: absolute;
+  width: 60px;
+  height: 60px;
+  margin: -30px 0 0 -30px;
+  padding: 0;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  color: #ffffff;
+  font-size: 24px;
+  font-family: inherit;
+}
+.cam-ptz:active { background: rgba(31, 111, 235, 0.8); }
+.cam-ptz[disabled] { opacity: 0.4; }
+.cam-ptz-up { top: 8px; left: 50%; margin-top: 0; }
+.cam-ptz-down { bottom: 8px; left: 50%; margin-top: 0; }
+.cam-ptz-left { left: 8px; top: 50%; margin-left: 0; }
+.cam-ptz-right { right: 8px; top: 50%; margin-left: 0; }
+#cam-ctl { max-height: 90px; margin-top: 10px; }
+#cam-ctl .ai-page-btn { font-size: 20px; }
+#cam-ctl .ai-page-btn + .ai-page-btn { margin: 0 0 0 6px; }
+#cam-ctl + .ai-page-btn { margin-top: 10px; }
 #up-pager { width: 116px; margin-left: 10px; }
 
 /* ---- smaller CSS viewports (e.g. 800x400 physical at 1.5 density = 533x267) ---- */
@@ -634,6 +660,7 @@ button {
   .overlay { padding: 6px 10px 10px 10px; }
   .overlay-head { font-size: 17px; margin-bottom: 8px; }
   .overlay-close { height: 40px; min-width: 100px; font-size: 16px; }
+  .ui-switch { line-height: 38px; margin-right: 8px; }
   .jump-row + .jump-row { margin-top: 10px; }
   .jump-tile { font-size: 17px; }
   .jump-tile + .jump-tile { margin-left: 10px; }
@@ -717,6 +744,12 @@ button {
   .cam-side-info { font-size: 11px; line-height: 14px; }
   .cam-side .ai-page-btn + .ai-page-btn { margin-top: 6px; }
   #up-pager { width: 84px; margin-left: 6px; }
+  .cam-ptz { width: 44px; height: 44px; margin: -22px 0 0 -22px; font-size: 18px; }
+  .cam-ptz-up, .cam-ptz-down { margin-top: 0; }
+  .cam-ptz-left, .cam-ptz-right { margin-left: 0; }
+  #cam-ctl { margin-top: 6px; }
+  #cam-ctl .ai-page-btn { font-size: 15px; }
+  #cam-ctl .ai-page-btn + .ai-page-btn { margin: 0 0 0 4px; }
   .cal-day { font-size: 11px; margin: 5px 0 3px 0; }
   .cal-ev { padding: 3px 6px; margin-bottom: 3px; border-left-width: 3px; border-radius: 6px; }
   .cal-time { width: 64px; font-size: 13px; }

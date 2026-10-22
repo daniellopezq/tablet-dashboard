@@ -385,6 +385,50 @@ class HomeRouteTests(DashboardTestCase):
         self.assertEqual(resp.status, 502)
         self.assertIn("Connection refused", json.loads(body)["error"])
 
+    def test_camera_control_routes(self):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import cameras
+        from test_cameras import ONVIF_CAM, FakeOnvif, make_fake_ffmpeg
+        tmp = tempfile.mkdtemp(prefix="cam-ctl-")
+        self.addCleanup(shutil.rmtree, tmp)
+        cfg = json.loads(json.dumps(cameras.DEFAULT_CAMERAS_CONFIG))
+        cfg.update(ffmpeg_path=make_fake_ffmpeg(tmp), list=[dict(ONVIF_CAM)])
+        cameras.validate_cameras_config(cfg)
+        self.app.cameras = cameras.Cameras(cfg, None, onvif_factory=FakeOnvif)
+        self.addCleanup(self.app.cameras.close)
+
+        resp, body = self.request(self.port, "/api/cameras/v380/controls")
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(json.loads(body)["mode"], "auto")
+        self.assertEqual(self.request(self.port, "/api/cameras/nope/controls")[0].status, 404)
+
+        def post(payload, headers=None):
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+            conn.request("POST", "/api/cameras/control", body=payload,
+                         headers=dict({"Content-Type": "application/json"}, **(headers or {})))
+            resp = conn.getresponse()
+            data = json.loads(resp.read() or b"{}")
+            conn.close()
+            return resp.status, data
+
+        self.assertEqual(post(b'{"id": "v380", "move": "right"}')[0], 200)
+        self.assertEqual(self.app.cameras._onvif["v380"].steps, [("right", 0.5, 0.5)])
+        self.assertEqual(post(b'{"id": "v380", "mode": "day"}'), (200, {"ok": True, "mode": "day"}))
+        self.assertEqual(post(b'{"id": "v380", "move": "spin"}')[0], 400)
+        self.assertEqual(post(b'{"id": "v380"}')[0], 400)
+        self.assertEqual(post(b'[1]')[0], 400)
+        self.assertEqual(post(b'{"id": "v380", "move": "left"}', {"Host": "evil.example"})[0], 403)
+        self.assertEqual(len(self.app.cameras._onvif["v380"].steps), 1)
+
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("GET", "/api/cameras/v380/live.mjpg?q=hd&t=1")
+        resp = conn.getresponse()
+        self.assertEqual(resp.status, 200)
+        resp.read1(64)
+        self.assertEqual(self.app.cameras._hd_feeds["v380"]._viewers, 1)
+        resp.close()
+        conn.close()
+
 class MediaTests(DashboardTestCase):
     def setUp(self):
         self.port = self.serve(self.make_app())

@@ -53,7 +53,7 @@ The browser is a thin client: no frontend build, modern JavaScript syntax, or he
 | Home and cameras (optional) | Your own [Home Assistant](https://www.home-assistant.io/) (REST API, long-lived token); RTSP cameras through ffmpeg (MJPEG for old browsers) |
 | Uptime (optional) | Built-in TCP/HTTP checks; [Uptime Kuma](https://github.com/louislam/uptime-kuma) status page or `/metrics` |
 | HTTPS | OpenSSL private CA, for microphone access on the LAN |
-| Tests | `unittest` with mock servers for every upstream service (227 tests) |
+| Tests | `unittest` with mock servers for every upstream service (269 tests) |
 
 ## Quick start
 
@@ -64,8 +64,13 @@ python3 server.py --check            # validate the config
 scripts/start.sh                     # runs in the background, log in logs/dashboard.log
 ```
 
-Open `http://<server-ip>:8099/` on the tablet. Stop the server with `scripts/stop.sh`. There is no autostart; use a systemd
-unit or cron `@reboot` if you want one.
+Open `http://<server-ip>:8099/` on the tablet. Stop the server with `scripts/stop.sh`.
+
+**Autostart (optional, since 0.18.0):** `scripts/install-autostart.sh` installs two systemd *user* services from
+`deploy/systemd/` (`tablet-dashboard`, restarted 5 s after a crash, and `tablet-local-ai` for the optional local models)
+and turns on lingering so they start at boot without a login. Use `--no-local-ai` to skip the models and `--remove` to go
+back to manual start/stop. With the units installed, `start.sh` and `stop.sh` call `systemctl --user`. Status and logs:
+`systemctl --user status tablet-dashboard`, `journalctl --user -u tablet-dashboard`.
 
 Optional features need extra setup and stay disabled or show a "not set up" message until you do it:
 
@@ -147,7 +152,8 @@ scripts/set-assistant-key.sh --remove                      # delete a key (KEY_N
 ```
 
 The admin page's **API keys** page does the same in the browser: save, replace, remove and test `AI_GATEWAY_API_KEY`,
-`GROQ_API_KEY`, `OPENWEATHER_API_KEY`, `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`, `KUMA_API`, `KUMA_PUSH_URL` and `HA_TOKEN`. It never
+`GROQ_API_KEY`, `OPENWEATHER_API_KEY`, `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`, `KUMA_API`, `KUMA_PUSH_URL` and `HA_TOKEN`
+(`BLINK_PROXY_TOKEN`, for the optional Blink live view, is not on that page yet: add it to `.env` yourself). It never
 shows a stored value, only the last 4 characters, and changes apply without a restart.
 
 The server refuses to use a `.env` that is group- or world-readable, a symlink, or owned by another user. Environment
@@ -169,6 +175,9 @@ variables with the same names take priority over the file.
 | `/api/cameras` | Camera list (label, availability, image version and time, motion, battery, live) and the current motion `alert`. LAN clients only. |
 | `/api/cameras/<id>.jpg?v=<version>` | Latest still of one camera (from HA by the server, so the token never reaches the tablet, or from the RTSP feed). LAN clients only. |
 | `/api/cameras/<id>/live.mjpg` | Live view of an RTSP camera as MJPEG (`multipart/x-mixed-replace`) for an `<img>`; ends after `live_max_seconds`. At most 4 viewers per camera. LAN clients only. |
+| `/api/cameras/<id>/live.mjpg?q=hd` | The same from the camera's HD stream (`rtsp_url_hd`), if it has one. |
+| `/api/cameras/<id>/controls` | What a camera's page can offer (`hd`, `ptz`, `day_night`) and its current day/night `mode`, read from the camera. LAN only. |
+| `POST /api/cameras/control` | One pan/tilt step (`{"id": "...", "move": "left\|right\|up\|down"}`) or a day/night change (`{"id": "...", "mode": "day\|night\|auto"}`) over ONVIF. Same-origin, LAN only. |
 | `POST /api/cameras/snapshot` | Ask one HA camera for a new picture (`{"id": "..."}`); wakes battery cameras, so rate limited. Same-origin, LAN only. |
 | `/api/config` | Client settings (version, timezone, clock format, weather unit, https port) |
 | `POST /api/assistant`, `/api/assistant/status` | Ask one question; setup state and remaining quota |
@@ -454,7 +463,43 @@ battery cameras. **Motion pop-up:** the tablet checks `/api/cameras` every 15 s 
 - `rtsp_url` may not contain a user:password or a query. Settings: `cameras.ffmpeg_path`, `still_seconds`,
   `live_idle_seconds`, `live_max_seconds`, and per camera `live_fps` (1-15).
 
-**Tests:** `python3 -m unittest tests.test_cameras` (mock HA; a fake FFmpeg process for RTSP cameras). These tests do not establish compatibility or resource use with a physical camera and the original tablet.
+**Camera controls (0.19.0).** Optional per RTSP camera:
+
+```json
+"rtsp_url_hd": "rtsp://192.168.1.20:554/live/ch00_0",
+"onvif_url": "http://192.168.1.20:8899/onvif/device_service"
+```
+
+- `rtsp_url_hd` adds an **HD / SD** choice to the live view. HD runs its own FFmpeg, only while someone watches it, and
+  costs noticeably more CPU and bandwidth than the sub-stream. The tablet starts in SD; phones and PCs start in HD and
+  remember the choice per device.
+- `onvif_url` (the camera's ONVIF device service) adds **pan/tilt arrows** over the live picture (each tap moves for half
+  a second, then stops; arrow keys on a PC) and **Day / Night / Auto** (the IR-cut filter). Turn either off with
+  `"ptz": false` or `"day_night": false`. `onvif.py` is a small standard-library SOAP client that calls the camera's
+  services on the configured host only.
+- `"mac"` (0.20.0) lets the server **find the camera again** if its address changes. When the stream or controls stop
+  answering, it sends an ONVIF WS-Discovery probe (at most every 2 minutes); if the device with that MAC answers from a new
+  address, the camera's URLs move there, in memory only, with a log warning to update `config.json`. A DHCP reservation
+  in the router is still the simplest way to keep the address.
+- Only cameras whose ONVIF needs no credentials are supported so far. Such cameras can be moved by anyone on the LAN.
+
+**Blink live view (0.21.0, optional).** Home Assistant's Blink integration only has snapshots. For live video the server
+can read a local [Blink live-view proxy](https://github.com/Teethree89/ha-blink-live-view-proxy) that signs in to your
+Blink account and streams each camera as MPEG-TS over HTTP. Run it yourself (e.g. in Docker, pinned to a version, published
+on loopback only), set the same `BLINK_PROXY_TOKEN` there and in this project's `.env`, then configure:
+
+```json
+"cameras": {"blink_proxy_url": "http://127.0.0.1:8088",
+            "list": [{"id": "door", "label": "Front door", "entity_id": "camera.front_door", "blink_live": "front_door"}]}
+```
+
+- `blink_live` is the proxy's name for the camera (from its `/cameras` list). The camera page gets a **Live** button.
+  Live view never starts on its own: each start is a Blink cloud session, and the proxy needs about 30 s between sessions.
+  Leaving the camera, changing tabs or hiding the page stops it.
+- The token is sent as an `Authorization` header, never in the URL (FFmpeg error messages quote URLs, and they can reach
+  the page). Blink live goes through Blink's cloud, so it needs the internet, unlike RTSP cameras.
+
+**Tests:** `python3 -m unittest tests.test_cameras tests.test_onvif` (mock HA; a mock ONVIF camera; a fake FFmpeg process for RTSP cameras). These tests do not establish compatibility or resource use with a physical camera and the original tablet.
 
 ## Weather data
 
@@ -471,7 +516,7 @@ Per-action authorization, especially for security-sensitive home controls, and a
 
 ## Known limitations
 
-- Cameras: Home Assistant/Blink feeds provide snapshots rather than live video. RTSP feeds and camera images are accessible to accepted LAN clients without a separate camera login; use trusted camera endpoints and network access rules.
+- Cameras: Home Assistant/Blink feeds provide snapshots; Blink live video needs the separate, optional live-view proxy. RTSP feeds, camera images and ONVIF controls are accessible to accepted LAN clients without a separate camera login; use trusted camera endpoints and network access rules.
 - English-only day and month names.
 - The RTSP live-view path is still being stabilized; initial-frame timeouts and real-hardware behavior require verification before calling the feature production-ready.
 - Home/camera hardware compatibility and the new tablet UI still need full end-to-end validation on the original Android 4.4 device. The automated suite uses mocks.

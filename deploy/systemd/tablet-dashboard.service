@@ -1,0 +1,27 @@
+# User service for the dashboard (installed by scripts/install-autostart.sh; @DIR@ is the project folder).
+# Starts at boot (needs `loginctl enable-linger`) and comes back 5 s after a crash.
+# scripts/start.sh and stop.sh call systemctl when this unit is enabled.
+[Unit]
+Description=Tablet dashboard (http/https server)
+After=tablet-local-ai.service
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=@DIR@
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/snap/bin
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/usr/bin/python3 server.py --check
+ExecStart=/usr/bin/python3 server.py --pidfile run/dashboard.pid
+StandardOutput=append:@DIR@/logs/dashboard.log
+StandardError=append:@DIR@/logs/dashboard.log
+Restart=always
+RestartSec=5
+# Only the server itself is stopped: local models restarted from the admin page run in this
+# unit's cgroup and must survive a dashboard restart.
+KillMode=process
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target

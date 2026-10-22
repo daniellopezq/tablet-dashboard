@@ -1,13 +1,25 @@
 import { h, replace, card, message, toast } from '../lib/dom.js';
 import { subscribe, current, refresh, refreshSoon } from '../lib/store.js';
-import { postJSON } from '../lib/api.js';
+import { getJSON, postJSON } from '../lib/api.js';
 import { ago, formatHM } from '../lib/clock.js';
 
 // Setting a blank picture (not removing src) is what makes browsers drop an MJPEG connection.
 const BLANK = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
 
 const stillUrl = (c) => `/api/cameras/${encodeURIComponent(c.id)}.jpg?v=${encodeURIComponent(c.version || '')}`;
-const liveUrl = (c, token) => `/api/cameras/${encodeURIComponent(c.id)}/live.mjpg?t=${token}`;
+const liveUrl = (c, token, hd) => `/api/cameras/${encodeURIComponent(c.id)}/live.mjpg?t=${token}${hd && c.hd ? '&q=hd' : ''}`;
+
+// Phones and PCs default to the HD stream; the choice is remembered on this device.
+const HD_KEY = 'dashboard.camHd';
+function hdWanted() { try { return localStorage.getItem(HD_KEY) !== '0'; } catch { return true; } }
+function setHdWanted(on) { try { localStorage.setItem(HD_KEY, on ? '1' : '0'); } catch { /* private mode */ } }
+
+const MODES = [['auto', 'Auto'], ['day', 'Day'], ['night', 'Night']];
+const MODE_TOAST = { night: 'Night mode: infrared, black and white', day: 'Day mode: colour', auto: 'Auto: the camera picks day or night' };
+const ARROWS = [['up', '▲'], ['down', '▼'], ['left', '◀'], ['right', '▶']];
+const KEYS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
+
+const errText = (err) => (err.status ? err.message : 'Could not reach the server');
 
 /** Change an <img> only when the URL really changed: no reload, no flicker, no dropped stream. */
 function setSrc(img, url) {
@@ -92,15 +104,102 @@ function detail(root, id) {
   const title = h('h1', { class: 'view-title' }, '');
   const info = h('div', { class: 'cam-info' });
   const action = h('button', { type: 'button', class: 'btn' }, '');
+  // On-demand live view of a Blink camera (through the Blink proxy); each start is a Blink cloud session.
+  const liveBtn = h('button', { type: 'button', class: 'btn btn-quiet', hidden: true, onclick: () => toggleBlinkLive() }, '');
+  const arrows = ARROWS.map(([dir, text]) => h('button',
+    { type: 'button', class: `cam-ptz cam-ptz-${dir}`, 'aria-label': `Move ${dir}`, hidden: true, onclick: () => move(dir) }, text));
+  const quality = h('div', { class: 'chips', role: 'group', 'aria-label': 'Picture quality' });
+  const modes = h('div', { class: 'chips', role: 'group', 'aria-label': 'Day or night' });
+  const controls = h('div', { class: 'cam-ctl', hidden: true }, quality, modes);
   replace(root, h('div', { class: 'view-cam-detail' },
     h('div', { class: 'cam-detail-head' }, h('a', { class: 'btn btn-quiet', href: '#cameras' }, '← All cameras'), title),
-    h('div', { class: 'cam-big-frame' }, img), h('div', { class: 'cam-detail-foot' }, info, action)));
+    h('div', { class: 'cam-big-frame' }, img, ...arrows), controls, h('div', { class: 'cam-detail-foot' }, info, h('div', { class: 'cam-actions' }, liveBtn, action))));
 
   let token = 0;
   let liveOn = false;
   let paused = false;
   let liveTimer = null;
   let cam = null;
+  let hd = hdWanted();
+  let mode = null;        // 'day' | 'night' | 'auto' | null (unknown)
+  let modeFetched = false;
+  let moving = false;
+  let blinkLive = false;
+
+  function toggleBlinkLive() {
+    if (!cam?.can_live) return;
+    if (blinkLive) {
+      blinkLive = false;
+      paused = false;
+      stopLive();
+    } else {
+      blinkLive = true;
+      paused = false;
+      toast('Starting live view; Blink takes a few seconds');
+    }
+    draw();
+  }
+
+  async function move(dir) {
+    if (!cam?.ptz || moving) return;
+    moving = true;
+    drawControls();
+    try {
+      await postJSON('/api/cameras/control', { id: cam.id, move: dir }, { timeout: 10000 });
+    } catch (err) {
+      toast(errText(err));
+    }
+    moving = false;
+    drawControls();
+  }
+
+  async function setMode(next) {
+    if (!cam?.day_night || next === mode) return;
+    try {
+      const r = await postJSON('/api/cameras/control', { id: cam.id, mode: next }, { timeout: 10000 });
+      mode = r.mode;
+      toast(MODE_TOAST[mode]);
+    } catch (err) {
+      toast(errText(err));
+    }
+    drawControls();
+  }
+
+  async function fetchMode() {
+    modeFetched = true;
+    try {
+      mode = (await getJSON(`/api/cameras/${encodeURIComponent(cam.id)}/controls`, { timeout: 8000 })).mode;
+    } catch { mode = null; }
+    drawControls();
+  }
+
+  function chip(text, selected, onclick) {
+    return h('button', { type: 'button', class: 'chip', 'aria-pressed': String(selected), 'aria-selected': String(selected), onclick }, text);
+  }
+
+  function drawControls() {
+    const live = !!cam?.live;
+    for (const b of arrows) { b.hidden = !(live && cam.ptz); b.disabled = moving; }
+    controls.hidden = !(live && (cam.hd || cam.day_night));
+    if (controls.hidden) return;
+    if (cam.day_night && !modeFetched) fetchMode();
+    replace(quality, cam.hd && [chip('SD', !hd, () => setHd(false)), chip('HD', hd, () => setHd(true))]);
+    replace(modes, cam.day_night && MODES.map(([m, text]) => chip(text, mode === m, () => setMode(m))));
+  }
+
+  function setHd(on) {
+    if (on === hd) return;
+    hd = on;
+    setHdWanted(on);
+    draw();
+  }
+
+  function onKey(e) {
+    const dir = KEYS[e.key];
+    if (!dir || !cam?.ptz || e.altKey || e.ctrlKey || e.metaKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+    e.preventDefault();
+    move(dir);
+  }
 
   function startLive() {
     clearTimeout(liveTimer);
@@ -116,22 +215,29 @@ function detail(root, id) {
     setSrc(img, '');
   }
   function onVisibility() {
-    if (document.hidden && cam?.live) { paused = true; stopLive(); draw(); }
+    if (!document.hidden) return;
+    if (blinkLive) { blinkLive = false; paused = false; stopLive(); draw(); return; }
+    if (cam?.live) { paused = true; stopLive(); draw(); }
   }
 
   function draw() {
     if (!cam) return;
     title.textContent = cam.label;
     img.alt = cam.label;
-    if (cam.live) {
+    liveBtn.hidden = !cam.can_live;
+    liveBtn.textContent = blinkLive ? 'Stop live' : 'Live view';
+    if (cam.live || blinkLive) {
       if (!liveOn && !paused) startLive();
-      setSrc(img, paused ? '' : liveUrl(cam, token));
+      setSrc(img, paused ? '' : liveUrl(cam, token, hd));
+      drawControls();
       replace(info, h('div', null, paused ? 'Live view paused' : cam.available ? 'Live' : 'Camera not answering'),
-        !cam.available && cam.error && h('div', { class: 'meta warn' }, cam.error));
+        !cam.available && cam.error && h('div', { class: 'meta warn' }, cam.error),
+        cam.live_error && h('div', { class: 'meta warn' }, cam.live_error));
       action.textContent = paused || !cam.available ? 'Resume live' : 'Restart live';
       action.disabled = false;
       return;
     }
+    drawControls();
     setSrc(img, cam.available === false ? '' : stillUrl(cam));
     replace(info,
       h('div', null, cam.updated_ms ? `Picture ${formatHM(cam.updated_ms)} (${ago(cam.updated_ms)})` : 'No picture yet'),
@@ -143,7 +249,7 @@ function detail(root, id) {
 
   action.addEventListener('click', async () => {
     if (!cam) return;
-    if (cam.live) { stopLive(); startLive(); draw(); return; }
+    if (cam.live || blinkLive) { stopLive(); startLive(); draw(); return; }
     action.disabled = true;
     try {
       await postJSON('/api/cameras/snapshot', { id: cam.id }, { timeout: 15000 });
@@ -156,6 +262,7 @@ function detail(root, id) {
     }
   });
   document.addEventListener('visibilitychange', onVisibility);
+  document.addEventListener('keydown', onKey);
 
   const unsub = subscribe('cameras', (d, err) => {
     const p = problem(d, err);
@@ -164,7 +271,11 @@ function detail(root, id) {
     if (!cam) { replace(root, message('Camera not found', 'It may have been removed from config.json.'), h('a', { class: 'btn', href: '#cameras' }, 'All cameras')); return; }
     draw();
   });
-  return () => { unsub(); stopLive(); document.removeEventListener('visibilitychange', onVisibility); };
+  return () => {
+    unsub(); stopLive();
+    document.removeEventListener('visibilitychange', onVisibility);
+    document.removeEventListener('keydown', onKey);
+  };
 }
 
 export default {

@@ -35,7 +35,7 @@ import netsim
 import uidetect
 import voice as voice_mod
 
-VERSION = "0.17.0"
+VERSION = "0.21.2"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 USER_AGENT = "TabletDashboard/%s (personal home dashboard)" % VERSION
@@ -588,6 +588,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return self._do_home_action()
         if path == "/api/cameras/snapshot":
             return self._do_camera_snapshot()
+        if path == "/api/cameras/control":
+            return self._do_camera_control()
         if path != "/api/assistant":
             return self._method_not_allowed()
         # Always close after a POST: early rejections leave the body unread.
@@ -668,8 +670,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._send_json(body, False, status=status, extra=extra)
 
     def _read_lan_json(self, what):
-        """Checks for the small LAN-only JSON POST routes. Returns the body's "id", or None after
-        sending an error response."""
+        """Checks for the small LAN-only JSON POST routes. Returns the body (a dict with a string
+        "id"), or None after sending an error response."""
         self.close_connection = True  # early rejections leave the body unread
         if not assistant_mod.is_lan_client(self.client_address[0]):
             return self._assistant_error(403, "forbidden", "%s are available on the local network only." % what)
@@ -688,45 +690,62 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except OSError:
             return None
         try:
-            bid = json.loads(raw.decode("utf-8")).get("id")
-        except (ValueError, AttributeError):
-            bid = None
-        if not isinstance(bid, str):
+            body = json.loads(raw.decode("utf-8"))
+        except ValueError:
+            body = None
+        if not isinstance(body, dict) or not isinstance(body.get("id"), str):
             return self._assistant_error(400, "bad_request", "Send {\"id\": \"...\"}.")
-        return bid
+        return body
 
     def _do_home_action(self):
         """POST /api/home/action {"id": "<button id>"}: press one Home-tab button. LAN only."""
-        bid = self._read_lan_json("Home controls")
-        if bid is None:
+        req = self._read_lan_json("Home controls")
+        if req is None:
             return
         try:
-            body = self.app.home.action(bid)
+            body = self.app.home.action(req["id"])
         except home_mod.ActionError as exc:
             return self._assistant_error(exc.code, "home_error", str(exc))
         self._send_json(body, False)
 
     def _do_camera_snapshot(self):
         """POST /api/cameras/snapshot {"id": "<camera id>"}: ask one camera for a new picture. LAN only."""
-        cid = self._read_lan_json("Cameras")
-        if cid is None:
+        req = self._read_lan_json("Cameras")
+        if req is None:
             return
         try:
-            body = self.app.cameras.request_snapshot(cid)
+            body = self.app.cameras.request_snapshot(req["id"])
         except home_mod.ActionError as exc:
             return self._assistant_error(exc.code, "camera_error", str(exc))
         self._send_json(body, False)
 
-    def _stream_live(self, cid, head):
+    def _do_camera_control(self):
+        """POST /api/cameras/control {"id", "move": "left|right|up|down"} or {"id", "mode": "day|night|auto"}:
+        one pan/tilt step or a day/night change. LAN only."""
+        req = self._read_lan_json("Camera controls")
+        if req is None:
+            return
+        try:
+            if "move" in req:
+                body = self.app.cameras.move(req["id"], req["move"])
+            elif "mode" in req:
+                body = self.app.cameras.set_mode(req["id"], req["mode"])
+            else:
+                return self._assistant_error(400, "bad_request", "Send \"move\" or \"mode\".")
+        except home_mod.ActionError as exc:
+            return self._assistant_error(exc.code, "camera_error", str(exc))
+        self._send_json(body, False)
+
+    def _stream_live(self, cid, head, hd=False):
         """MJPEG (multipart/x-mixed-replace) live view of an RTSP camera, for an <img>. LAN only."""
         self.close_connection = True
         try:
-            frames = self.app.cameras.live(cid)
+            frames = self.app.cameras.live(cid, hd)
             first = next(frames)
         except home_mod.ActionError as exc:
             return self._send_json({"error": str(exc)}, head, status=exc.code)
         except StopIteration:
-            feed_error = self.app.cameras.live_error(cid)
+            feed_error = self.app.cameras.live_error(cid, hd)
             return self._send_json({"error": feed_error or "camera not answering"}, head, status=502)
         try:
             self.send_response(200)
@@ -813,13 +832,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return self._send_json({"error": "forbidden"}, head, status=403)
             if path == "/api/cameras":
                 return self._send_json(self.app.cameras.snapshot(), head)
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             m = re.match(r"^/api/cameras/([a-z0-9_-]{1,32})/live\.mjpg$", path)
             if m:
-                return self._stream_live(m.group(1), head)
+                return self._stream_live(m.group(1), head, query.get("q", [""])[0] == "hd")
+            m = re.match(r"^/api/cameras/([a-z0-9_-]{1,32})/controls$", path)
+            if m:
+                try:
+                    return self._send_json(self.app.cameras.controls(m.group(1)), head)
+                except home_mod.ActionError as exc:
+                    return self._send_json({"error": str(exc)}, head, status=exc.code)
             m = re.match(r"^/api/cameras/([a-z0-9_-]{1,32})\.jpg$", path)
             if not m:
                 return self._send_json({"error": "not found"}, head, status=404)
-            version = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("v", [""])[0][:40]
+            version = query.get("v", [""])[0][:40]
             try:
                 data, ctype = self.app.cameras.image(m.group(1), version)
             except home_mod.ActionError as exc:

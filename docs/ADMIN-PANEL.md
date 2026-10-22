@@ -102,7 +102,7 @@ Every dict in `DEFAULT_CONFIG` is a section. Partial overrides merge one level d
 
 Settings that apply live are pushed to the running service; for example, `apply_settings()` on assistant and voice swaps their cfg and their gate cooldown. Fields marked restart-needed in `SETTINGS` bring up the restart banner.
 
-**Restart** re-executes the process with `os.execv`, after the response has been sent. The PID stays the same.
+**Restart** re-executes the process with `os.execv`, after the response has been sent. The PID stays the same, so under systemd (0.18.0) the service simply stays `active`; it is not counted as a crash. Any restart signs the admin out, because sessions are in memory.
 
 ## 5. Health checks
 
@@ -120,21 +120,25 @@ On top of those come the `health.targets` checks and the Kuma monitors. Since 0.
 
 Example targets: a media server (`tcp`, port 32400), a file share (`tcp`, port 445), or a web app (`http`). With Kuma enabled, every monitor of your Kuma instance is listed too.
 
+**Public snapshot (0.11.0).** `HealthChecker.public_snapshot()` feeds `GET /api/uptime` (LAN only), which the tablet's Uptime section and the modern view's Uptime page and Overview card read. It carries only names, the group (`kuma` or `service`), state, ping, uptime % and the last 30 history letters: no hostnames, URLs or error text. The admin `GET health` keeps the full detail. Built-in checks (listeners, keys, certificate…) stay admin-only.
+
 ## 6. Tests
 
 | File | Tests | Covers |
 |---|---:|---|
 | `tests/test_admin.py` | 27 | http and non-LAN rejection, session required, CSRF header and Origin checks, no-password state, wrong password and lockout, idle expiry, hashing; key set, mask and remove (keeps the `GROQ` alias, refuses bad values, pasted newlines and an unsafe `.env`); settings saved live vs restart-needed, invalid saves change nothing; AI save applied live; offline switch and the tablet flag; Google connect by pasted redirect; the restart hook; logs and usage |
-| `tests/test_health.py` | 14 | Kuma metrics and status-page parsers and clients (fixtures), push, config validation, TCP and HTTP checks, checker history, a failing built-in check is reported rather than raised; `localai`: model inventory, the path guard, the RAM guard, env lines |
+| `tests/test_health.py` | 16 | Kuma metrics and status-page parsers and clients (fixtures), push, config validation, TCP and HTTP checks, checker history, a failing built-in check is reported rather than raised; `localai`: model inventory, the path guard, the RAM guard, env lines |
 | `tests/test_netsim.py` | 11 | expiry, parsing, instant and realistic modes, gate reset |
 
-Run all of them with `python3 -m unittest discover -s tests`: 182 tests at 0.9.0.
+Run all of them with `python3 -m unittest discover -s tests`: 269 tests at 0.21.2 (247 at 0.18.0, 182 at 0.9.0).
 
 ## 7. Not done yet
 
 - Alerts on state changes (ntfy or email)
 - Audit log of admin actions
 - Tablet controls (night dimming, forced reload, default tab)
-- Camera list editor
-- A "Servers" chip on the tablet
-- Port to the public repo, with sanitizing
+- Camera list editor (cameras are still edited in `config.json`). Since 0.20.0 the server follows a moved RTSP camera by MAC on its own, in memory only, and logs a warning to update `config.json`.
+- `BLINK_PROXY_TOKEN` (0.21.0, Blink live view) on the API keys page: for now it's added to `.env` by hand
+- An autostart switch (install/remove is a script for now: `scripts/install-autostart.sh`)
+
+Done since this list was written: the tablet "Servers" chip became the Uptime section (0.11.0), and the admin page is in the public repo (ported with 0.7.0–0.10.0).

@@ -138,10 +138,20 @@
           </div>
       </div>
       <div class="cam-detail row grow is-hidden" id="cam-detail">
-        <div class="cam-big grow"><img class="cam-big-img" id="cam-big-img" alt=""></div>
+        <div class="cam-big grow"><img class="cam-big-img" id="cam-big-img" alt="">
+          <button type="button" class="cam-ptz cam-ptz-up is-hidden" id="cam-ptz-up" data-dir="up">&#9650;</button>
+          <button type="button" class="cam-ptz cam-ptz-down is-hidden" id="cam-ptz-down" data-dir="down">&#9660;</button>
+          <button type="button" class="cam-ptz cam-ptz-left is-hidden" id="cam-ptz-left" data-dir="left">&#9664;</button>
+          <button type="button" class="cam-ptz cam-ptz-right is-hidden" id="cam-ptz-right" data-dir="right">&#9654;</button>
+        </div>
         <div class="cam-side col">
           <div class="cam-side-name" id="cam-d-name"></div>
           <div class="cam-side-info grow" id="cam-d-info"></div>
+          <div class="cam-ctl row grow is-hidden" id="cam-ctl">
+            <button type="button" class="ai-page-btn grow" id="cam-hd">SD</button>
+            <button type="button" class="ai-page-btn grow" id="cam-mode">Auto</button>
+            <button type="button" class="ai-page-btn grow is-hidden" id="cam-live">Live</button>
+          </div>
           <button type="button" class="ai-page-btn grow" id="cam-snap">New snapshot</button>
           <button type="button" class="ai-page-btn grow cam-back" id="cam-back">&#9664; All cameras</button>
         </div>
@@ -249,6 +259,7 @@
   <div class="overlay col is-hidden" id="jump">
     <div class="overlay-head row">
       <strong class="grow">Go to</strong>
+      <a class="overlay-close ui-switch" href="/?ui=modern">Modern view</a>
       <button type="button" class="overlay-close" id="btn-jump-close">Close</button>
     </div>
     <div class="jump-row row grow">

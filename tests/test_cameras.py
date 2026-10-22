@@ -378,5 +378,236 @@ class RtspTests(unittest.TestCase):
         self.assertEqual(cm.exception.code, 404)
 
 
+
+class FakeOnvif:
+    """Stands in for onvif.Camera."""
+    def __init__(self, url):
+        self.url = url
+        self.steps = []
+        self.ir = "auto"
+        self.down = False
+
+    def _check(self):
+        if self.down:
+            raise cameras.onvif.OnvifError("camera not answering (timed out)")
+
+    def step(self, direction, speed, seconds):
+        self._check()
+        self.steps.append((direction, speed, seconds))
+
+    def mode(self):
+        self._check()
+        return self.ir
+
+    def set_mode(self, mode):
+        self._check()
+        self.ir = mode
+
+
+ONVIF_CAM = dict(RTSP_CAM, rtsp_url_hd="rtsp://192.168.1.20:554/live/ch00_0",
+                 onvif_url="http://192.168.1.20:8899/onvif/device_service")
+
+
+class ControlTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="cam-ctl-")
+        self.cfg = copy.deepcopy(cameras.DEFAULT_CAMERAS_CONFIG)
+        self.cfg["ffmpeg_path"] = make_fake_ffmpeg(self.tmp)
+        self.cfg["list"] = [dict(ONVIF_CAM), dict(RTSP_CAM, id="plain", label="Plain")]
+        cameras.validate_cameras_config(self.cfg)
+        self.cams = cameras.Cameras(self.cfg, None, onvif_factory=FakeOnvif)
+        self.ptz = self.cams._onvif["v380"]
+
+    def tearDown(self):
+        self.cams.close()
+        shutil.rmtree(self.tmp)
+
+    def test_validation(self):
+        for bad in ({"onvif_url": "http://user:pw@192.168.1.20:8899/onvif"}, {"onvif_url": "https://x/"},
+                    {"onvif_url": "http://x/a?b=1"}, {"rtsp_url_hd": "http://x/"}, {"ptz": "yes"}):
+            c = copy.deepcopy(self.cfg)
+            c["list"][0].update(bad)
+            with self.assertRaises(ValueError, msg=bad):
+                cameras.validate_cameras_config(c)
+        c = copy.deepcopy(self.cfg)
+        c["list"][1]["ptz"] = True  # no onvif_url
+        with self.assertRaises(ValueError):
+            cameras.validate_cameras_config(c)
+
+    def test_flags_in_snapshot(self):
+        items = {c["id"]: c for c in self.cams.snapshot()["cameras"]}
+        self.assertEqual((items["v380"]["hd"], items["v380"]["ptz"], items["v380"]["day_night"]), (True, True, True))
+        self.assertEqual((items["plain"]["hd"], items["plain"]["ptz"], items["plain"]["day_night"]), (False, False, False))
+        self.cfg["list"][0]["ptz"] = False
+        self.assertFalse(self.cams.snapshot()["cameras"][0]["ptz"])
+
+    def test_hd_uses_its_own_feed(self):
+        hd = self.cams._hd_feeds["v380"]
+        self.assertIn("rtsp://192.168.1.20:554/live/ch00_0", hd.command())
+        g = self.cams.live("v380", hd=True)
+        next(g)
+        self.assertEqual(hd._viewers, 1)
+        self.assertIsNone(self.cams._feeds["v380"]._proc)
+        g.close()
+        g = self.cams.live("plain", hd=True)  # no HD stream: the usual one
+        next(g)
+        self.assertEqual(self.cams._feeds["plain"]._viewers, 1)
+        g.close()
+
+    def test_move_and_mode(self):
+        self.assertEqual(self.cams.move("v380", "left"), {"ok": True})
+        self.assertEqual(self.ptz.steps, [("left", 0.5, 0.5)])
+        self.assertEqual(self.cams.controls("v380")["mode"], "auto")
+        self.assertEqual(self.cams.set_mode("v380", "night"), {"ok": True, "mode": "night"})
+        self.assertEqual(self.cams.controls("v380")["mode"], "night")
+        for call, code in ((lambda: self.cams.move("v380", "spin"), 400),
+                           (lambda: self.cams.set_mode("v380", "dusk"), 400),
+                           (lambda: self.cams.move("plain", "left"), 404),
+                           (lambda: self.cams.move("nope", "left"), 404)):
+            with self.assertRaises(home.ActionError) as cm:
+                call()
+            self.assertEqual(cm.exception.code, code)
+
+    def test_camera_down(self):
+        self.ptz.down = True
+        with self.assertRaises(home.ActionError) as cm:
+            self.cams.move("v380", "up")
+        self.assertEqual(cm.exception.code, 502)
+        ctl = self.cams.controls("v380")
+        self.assertIsNone(ctl["mode"])
+        self.assertIn("not answering", ctl["error"])
+
+
+
+class RelocateTests(unittest.TestCase):
+    MAC = "00:00:5e:00:53:01"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="cam-move-")
+        self.cfg = copy.deepcopy(cameras.DEFAULT_CAMERAS_CONFIG)
+        self.cfg["ffmpeg_path"] = make_fake_ffmpeg(self.tmp)
+        self.cfg["list"] = [dict(ONVIF_CAM, mac=self.MAC.upper())]
+        cameras.validate_cameras_config(self.cfg)
+        self.answers = {}
+        self.searches = 0
+
+        def discover():
+            self.searches += 1
+            return self.answers
+
+        self.cams = cameras.Cameras(self.cfg, None, onvif_factory=FakeOnvif, discover=discover)
+        self.moved = []
+        self.cams._onvif["v380"].moved_to = self.moved.append
+
+    def tearDown(self):
+        self.cams.close()
+        shutil.rmtree(self.tmp)
+
+    def test_moves_every_url_to_the_new_address(self):
+        self.answers = {"192.168.1.30": (["http://192.168.1.30:8899/x"], "aa:bb:cc:dd:ee:ff"),
+                        "192.168.1.77": (["http://192.168.1.77:8899/onvif/device_service"], self.MAC)}
+        self.assertEqual(self.cams.relocate("v380"), "192.168.1.77")
+        cam = self.cfg["list"][0]
+        self.assertEqual(cam["rtsp_url"], "rtsp://192.168.1.77:554/live/ch00_1")
+        self.assertEqual(cam["rtsp_url_hd"], "rtsp://192.168.1.77:554/live/ch00_0")
+        self.assertEqual(self.cams._feeds["v380"].url, "rtsp://192.168.1.77:554/live/ch00_1")
+        self.assertIn("rtsp://192.168.1.77:554/live/ch00_0", self.cams._hd_feeds["v380"].command())
+        self.assertEqual(self.moved, ["http://192.168.1.77:8899/onvif/device_service"])
+
+    def test_rate_limited_and_same_address(self):
+        self.answers = {"192.168.1.20": (["http://192.168.1.20:8899/x"], self.MAC)}
+        self.assertIsNone(self.cams.relocate("v380"))  # still where config says
+        self.assertIsNone(self.cams.relocate("v380"))
+        self.assertEqual(self.searches, 1)
+        self.assertEqual(self.moved, [])
+
+    def test_failed_feed_starts_a_search(self):
+        set_mode(self.tmp, "fail")
+        self.answers = {"192.168.1.88": (["http://192.168.1.88:8899/onvif/device_service"], self.MAC)}
+        set_mode(self.tmp, "fail")
+        with self.assertRaises(home.ActionError):
+            self.cams.image("v380", "s1")
+        end = time.monotonic() + 5
+        while self.cams._feeds["v380"].url.find("192.168.1.88") < 0 and time.monotonic() < end:
+            time.sleep(0.05)
+        self.assertEqual(self.cams._feeds["v380"].url, "rtsp://192.168.1.88:554/live/ch00_1")
+        set_mode(self.tmp, "ok")
+        data, _ = self.cams.image("v380", "s2")  # the retry wait was cleared: works at once
+        self.assertTrue(data.startswith(b"\xff\xd8"))
+
+    def test_without_mac_nothing_searches(self):
+        self.cfg["list"][0].pop("mac")
+        self.assertIsNone(self.cams.relocate("v380"))
+        self.assertEqual(self.searches, 0)
+
+    def test_bad_mac_rejected(self):
+        c = copy.deepcopy(self.cfg)
+        c["list"][0]["mac"] = "00:00"
+        with self.assertRaises(ValueError):
+            cameras.validate_cameras_config(c)
+
+
+
+class BlinkLiveTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="cam-blink-")
+        self.cfg = copy.deepcopy(cameras.DEFAULT_CAMERAS_CONFIG)
+        self.cfg.update(ffmpeg_path=make_fake_ffmpeg(self.tmp), blink_proxy_url="http://127.0.0.1:8088")
+        self.cfg["list"] = [dict(CAMS[0], blink_live="cámara_patio"), dict(CAMS[1])]
+        cameras.validate_cameras_config(self.cfg)
+        self.token = "t0ken"
+        self.cams = cameras.Cameras(self.cfg, None, blink_token=lambda: self.token)
+        self.feed = self.cams._blink_feeds["door"]
+
+    def tearDown(self):
+        self.cams.close()
+        shutil.rmtree(self.tmp)
+
+    def test_validation(self):
+        for bad in ({"blink_live": "Camara Patio"}, {"blink_live": ""}, {"blink_live": "a/b"}, {"blink_live": "_x"}):
+            c = copy.deepcopy(self.cfg)
+            c["list"][0].update(bad)
+            with self.assertRaises(ValueError, msg=bad):
+                cameras.validate_cameras_config(c)
+        for url in ("https://127.0.0.1:8088", "http://x/path", "http://user:pw@x"):
+            c = copy.deepcopy(self.cfg)
+            c["blink_proxy_url"] = url
+            with self.assertRaises(ValueError, msg=url):
+                cameras.validate_cameras_config(c)
+        c = copy.deepcopy(self.cfg)
+        c["blink_proxy_url"] = ""
+        with self.assertRaises(ValueError):  # blink_live without a proxy
+            cameras.validate_cameras_config(c)
+
+    def test_command_keeps_the_token_out_of_the_url(self):
+        cmd = self.feed.command()
+        url = cmd[cmd.index("-i") + 1]
+        self.assertEqual(url, "http://127.0.0.1:8088/cameras/c%C3%A1mara_patio/mpegts?seconds=660")
+        self.assertNotIn("t0ken", url)
+        self.assertEqual(cmd[cmd.index("-headers") + 1], "Authorization: Bearer t0ken\r\n")
+        self.assertNotIn("-rtsp_transport", cmd)
+        self.token = None
+        self.assertNotIn("-headers", self.feed.command())
+
+    def test_proxy_errors_in_plain_words(self):
+        msg = ("http://127.0.0.1:8088/cameras/c%C3%A1mara_patio/mpegts?seconds=660: Server returned 4XX Client "
+               "Error, but not one of 40{0,1,3,4}")
+        self.assertIn("30 s between live views", self.feed._explain(msg))
+        self.assertNotIn("127.0.0.1", self.feed._explain("http://127.0.0.1:8088/x: Something odd"))
+        rtsp = self.cams._feeds.get("v380")
+        self.assertIsNone(rtsp)  # only Blink feeds here; RTSP messages pass through unchanged:
+        plain = cameras.LiveFeed(dict(RTSP_CAM), self.cfg)
+        self.assertEqual(plain._explain("rtsp://x: Connection refused"), "rtsp://x: Connection refused")
+
+    def test_live_on_demand(self):
+        g = self.cams.live("door")
+        self.assertTrue(next(g).startswith(b"\xff\xd8"))
+        self.assertEqual(self.feed._viewers, 1)
+        g.close()
+        with self.assertRaises(home.ActionError) as cm:
+            self.cams.live("hall")  # no blink_live: still no live view
+        self.assertEqual(cm.exception.code, 404)
+
+
 if __name__ == "__main__":
     unittest.main()

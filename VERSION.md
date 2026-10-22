@@ -13,6 +13,87 @@ that period.
 
 Versions 0.15.0 to 0.17.0 were developed on the author's own server and published together.
 
+Versions 0.18.0 to 0.21.2 were developed on the author's own server and published together.
+
+## 0.21.2 (2026-10-22): Reference docs refreshed
+
+**Changed** (docs only)
+- `docs/SYSTEM-OVERVIEW.md` covers 0.18–0.21:
+  - autostart, the camera controls, find-by-MAC, Blink live through a local proxy, and the Modern view button;
+  - a new Cameras constraints table;
+  - an updated status section.
+- `docs/ADMIN-PANEL.md` and `docs/LOCAL-FALLBACK-ARCHITECTURE.md`: status, systemd behaviour and test counts.
+
+## 0.21.1 (2026-10-22): Switch from the classic to the modern view
+
+**Improved**
+- The classic view's **Go to** menu (tap the section name in the rail) has a **Modern view** button. A PC that got the
+  classic view (for example after choosing "Classic view", which is remembered in a cookie) can switch back in one tap.
+  `/?ui=auto` returns to automatic detection.
+
+## 0.21.0 (2026-10-21): Blink live view (on demand, through a local proxy)
+
+**Added**
+- A Blink camera can have an on-demand **Live view** on the tablet and on phones/PCs. It's read from a local
+  [Blink live-view proxy](https://github.com/Teethree89/ha-blink-live-view-proxy) that you run yourself (e.g. Docker,
+  pinned, published on loopback only), which streams MPEG-TS over HTTP. The existing `LiveFeed` turns that into MJPEG,
+  scaled to 720p, with one FFmpeg shared by every viewer.
+- The page starts it only when asked: each start is a Blink cloud session, and the proxy allows a new one about 30 s
+  after the last. Leaving the camera, changing tabs or hiding the page stops it and forgets it.
+- Config: `cameras.blink_proxy_url` (empty = off), `cameras.blink_proxy_token_name` (default `BLINK_PROXY_TOKEN`, read
+  from `.env`), and per Home Assistant camera `blink_live`, the proxy's camera name (accents allowed, percent-encoded).
+- The token goes to the proxy as an `Authorization` header, never in the URL, because FFmpeg's error messages quote the
+  URL and appear on the page. Proxy errors are reworded: cooldown, unknown camera, refused token, proxy not running.
+- `/api/cameras` items have `can_live` and `live_error`. 269 tests in total.
+
+**Measured (one Blink camera):** first picture about 7.5 s after the press. Blink sends 1920x1080; at 720p the FFmpeg
+uses about 27% of one core of an i3-4150 and sends about 300 KB/s.
+
+## 0.20.0 (2026-10-21): Find a camera again after its address changes
+
+**Added**
+- Optional `"mac"` per RTSP camera. When its stream ends without a single frame, or an ONVIF control gets no answer, the
+  server sends an ONVIF WS-Discovery probe (multicast 239.255.255.250:3702), at most every 2 minutes per camera. If the
+  device with that MAC answers from a new address, the camera's `rtsp_url`, `rtsp_url_hd` and `onvif_url` move there, in
+  memory only, with a log warning to update `config.json`.
+- The MAC comes from the reply's endpoint address when it carries one, or else from ONVIF `GetNetworkInterfaces`.
+  `onvif.py` gains `discover()`, `parse_probe_match()`, `normalize_mac()`, `Camera.mac()` and `Camera.moved_to()`.
+- Tests for discovery parsing and relocation. 265 in total.
+
+**Verified** on a real V380: with its URLs pointed at an unused address, the dashboard found it again about 5 s after the
+first failed picture.
+
+## 0.19.0 (2026-10-21): Camera controls (pan/tilt, HD/SD, day/night)
+
+**Added**
+- **Pan/tilt arrows** over a live camera's picture, on the tablet and on phones/PCs (plus arrow keys on a PC). Each tap is a
+  half-second ONVIF `ContinuousMove` followed by `Stop`.
+- **HD / SD** for the live view: an optional `rtsp_url_hd` (the camera's main stream) gets its own on-demand FFmpeg. The
+  tablet starts in SD; phones and PCs start in HD and remember the choice.
+- **Day / Night / Auto** (the ONVIF IR-cut filter). On the tablet one button steps through them; the modern view has three
+  chips. The current mode is read from the camera when its page opens.
+- `onvif.py`: a minimal standard-library ONVIF client (`GetCapabilities`, `GetProfiles`, PTZ, imaging). Service addresses
+  from the camera are reduced to their paths and always called on the configured host.
+- Per-camera config: `rtsp_url_hd`, `onvif_url`, and optional `ptz` and `day_night` (both on by default with `onvif_url`).
+  Routes: `GET /api/cameras/<id>/controls`, `POST /api/cameras/control`, `live.mjpg?q=hd`.
+- Tests: `tests/test_onvif.py` (mock camera), control and HD tests. 257 in total.
+
+**Measured on a V380:** HD 1280x720 at 10 fps costs 14-19% of one core and about 330 KB/s, against about 10% and 110 KB/s
+for SD. A pan step answers in about 0.6 s.
+
+## 0.18.0 (2026-10-21): Autostart and crash recovery
+
+**Added**
+- **systemd user services** in `deploy/systemd/`: `tablet-dashboard.service` starts the dashboard at boot and restarts it
+  5 s after a crash (`Restart=always`); `tablet-local-ai.service` starts the optional local models. With lingering on,
+  both start without a login.
+- `scripts/install-autostart.sh` installs and enables the units and hands a running dashboard over to systemd;
+  `--remove` goes back to manual mode, and `--no-local-ai` enables the dashboard only.
+
+**Changed**
+- `scripts/start.sh` and `scripts/stop.sh` use `systemctl --user` when autostart is installed, so the usual commands
+  work unchanged.
+
 ## 0.17.0 (2026-10-21): Modern view phase 3 (Ask with voice), so every section is now in the modern view
 
 **Added** (modern view for phones and PCs; the tablet's classic view is unchanged)

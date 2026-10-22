@@ -5,7 +5,8 @@
 The tablet dashboard's **Ask** tab (chat) and **Voice** button (speech-to-text) normally use cloud APIs. This subsystem adds small models running on the home server that take over **only when the cloud doesn't respond at all**: the internet is down, DNS is broken, or the provider is unreachable. It runs on a 2014-era desktop with a 2-core i3 and a GTX 745, alongside Plex, Jellyfin and a remote-desktop server.
 
 - Version: introduced in **0.7.0**; the admin page controls and the offline test switch came in **0.9.0** (see `VERSION.md`).
-- Status (2026-10-19): **live**. The dashboard has run with the fallback enabled since the 0.9.0 restart. The load tests, the tablet speech set and the tablet end-to-end test are still open (see [Open work](#open-work)).
+- Status (2026-10-21, version 0.18.0): **live**. The dashboard has run with the fallback enabled since the 0.9.0 restart, and since 0.18.0 the local models start at boot as the systemd user service `tablet-local-ai`. The load tests, the tablet speech set and the tablet end-to-end test are still open (see [Open work](#open-work)).
+- Clients: the tablet's classic page sends 16 kHz WAV; since 0.17.0 the phone/PC modern view sends `MediaRecorder` WebM/Opus (MP4 on Safari). Both go through the same `/api/transcribe`, content sniffing and ffmpeg conversion, so the fallback behaves the same for both.
 - Measurements and model comparisons: [LOCAL-AI-BENCHMARKS.md](LOCAL-AI-BENCHMARKS.md).
 - Original plan and its review: [LOCAL-FALLBACK-PLAN.md](LOCAL-FALLBACK-PLAN.md).
 
@@ -317,7 +318,11 @@ The real local models answer, so this measures true end-to-end latency. Never po
 
 ## 11. Operations
 
+Since 0.18.0 the models normally run as the systemd user service `tablet-local-ai` (a oneshot unit around the two scripts below), started at boot. The scripts still work directly and are what the unit and the admin page call; they keep their own pidfiles, so starting twice is harmless.
+
 ```bash
+systemctl --user status tablet-local-ai   # boot-time unit (active = the start script succeeded)
+systemctl --user restart tablet-local-ai  # stop + start both models through the unit
 scripts/local-ai-start.sh          # starts both servers (idempotent), health-checks, warms up whisper
 scripts/local-ai-stop.sh           # stops them by pidfile, verifying the command line
 scripts/start.sh                   # dashboard; also starts local AI unless NO_LOCAL_AI=1
@@ -330,7 +335,7 @@ curl -s http://127.0.0.1:8091/health                      # {"status":"ok"}
 nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv   # whisper-server ≈ 315 MiB
 ```
 
-The admin page (`https://<server>:8443/admin`, **AI models** page) covers the same ground in the browser: model and backend choice, start/stop/restart, health, PID and RAM per server, and the last log lines.
+The admin page (`https://<server>:8443/admin`, **AI models** page) covers the same ground in the browser: model and backend choice, start/stop/restart, health, PID and RAM per server, and the last log lines. Models restarted from the admin page run in the dashboard service's cgroup; its `KillMode=process` makes sure a dashboard restart never takes them down.
 
 Logs: `logs/llama-server.log`, `logs/whisper-server.log`. Usage: `data/assistant-usage.jsonl`, `data/voice-usage.jsonl` (filter `"source":"local"`).
 
@@ -346,5 +351,5 @@ Logs: `logs/llama-server.log`, `logs/whisper-server.log`. Usage: `data/assistant
 4. **Tablet end to end** over HTTPS, with the fallback forced by the offline test switch (Realistic mode, Ask and Voice); measure tap-to-answer.
 5. Investigate ≈ 0.9 s of overhead between whisper-server alone (≈ 2.0 s) and the dashboard's local voice phase (≈ 2.9 s); `verbose_json` output is the first suspect.
 6. Reduce the ffmpeg cold start (keep it warm, or use a non-snap ffmpeg).
-7. Autostart (systemd) remains deferred for the whole dashboard.
+7. ~~Autostart (systemd)~~: done in 0.18.0 (2026-10-21) for both the dashboard and the local models. Still to confirm through a real reboot.
 8. Optional: a tiny local facts file (city distances, capitals of the region) in the prompt would fix the most visible wrong answers.

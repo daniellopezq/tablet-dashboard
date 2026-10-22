@@ -1,0 +1,19 @@
+# User service for the local fallback models (llama-server :8091, whisper-server :8092).
+# Installed by scripts/install-autostart.sh; @DIR@ is the project folder. The scripts keep their own
+# pidfiles, so the admin page can still restart the models with the same scripts.
+[Unit]
+Description=Tablet dashboard local AI fallback models
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=@DIR@
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/snap/bin
+ExecStart=@DIR@/scripts/local-ai-start.sh
+ExecStop=@DIR@/scripts/local-ai-stop.sh
+# The stop script stops the models; nothing else is killed.
+KillMode=process
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target

@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
 # Stop the dashboard started by start.sh. Only signals a PID whose command line is this server.
+# With autostart installed this stops the systemd service (which then stays stopped until start.sh).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PIDFILE=run/dashboard.pid
+
+if systemctl --user is-enabled --quiet tablet-dashboard.service 2>/dev/null; then
+  PID=$(systemctl --user show -p MainPID --value tablet-dashboard.service)
+  systemctl --user stop tablet-dashboard.service
+  echo "dashboard stopped (PID $PID, systemd)"
+  exit 0
+fi
 
 if [ ! -f "$PIDFILE" ]; then
   echo "dashboard not running (no pidfile)"
