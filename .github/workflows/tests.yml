@@ -1,0 +1,27 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unittest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # The server runs on Ubuntu 24.04's Python 3.12, so CI uses the same version.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # FFmpeg converts voice uploads and camera streams; Pillow composites the weather maps.
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          python -m pip install pillow
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v

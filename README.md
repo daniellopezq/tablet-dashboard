@@ -4,7 +4,7 @@
 
 The tablet runs plain ES5 JavaScript; a lightweight Python server handles APIs, caching, media conversion and private keys. Cloud AI and transcription can fall back to small local models when the cloud fails to respond. The goal is to make otherwise obsolete hardware useful without replacing it or depending on a modern browser.
 
-**Current release:** [0.14.0](VERSION.md) (October 2026). The repository documents **227 unittest tests**; upstream services and camera processes are mocked in tests, and compatibility still needs real-device checks.
+**Current release:** [0.21.2](VERSION.md) (October 2026). The repository has **269 unittest tests**, run on every push by GitHub Actions; upstream services and camera processes are mocked in tests, and compatibility still needs real-device checks.
 
 ## What it does
 

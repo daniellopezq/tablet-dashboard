@@ -83,6 +83,11 @@ def make_tone(path, seconds, extra):
         return f.read()
 
 
+def has_encoder(name):
+    out = subprocess.run([FFMPEG, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=30).stdout
+    return any(line.split()[1:2] == [name] for line in out.splitlines())
+
+
 class VoiceTestCase(DashboardTestCase):
     @classmethod
     def setUpClass(cls):
@@ -99,12 +104,13 @@ class VoiceTestCase(DashboardTestCase):
             "ogg": (make_tone(f("t.ogg"), 2, ["-c:a", "libopus"]), "audio/ogg"),
             "webm": (make_tone(f("t.webm"), 2, ["-c:a", "libopus"]), "audio/webm;codecs=opus"),
             "mp3": (make_tone(f("t.mp3"), 2, ["-c:a", "libmp3lame"]), "audio/mpeg"),
-            "3gp": (make_tone(f("t.3gp"), 2, ["-ar", "8000", "-ac", "1", "-c:a", "libopencore_amrnb",
-                                               "-b:a", "12.2k"]), "video/3gpp"),
-            "amr": (make_tone(f("t.amr"), 2, ["-ar", "8000", "-ac", "1", "-c:a", "libopencore_amrnb",
-                                               "-b:a", "12.2k"]), "audio/amr"),
             "unlabeled": (make_tone(f("u.m4a"), 2, ["-c:a", "aac"]), "application/octet-stream"),
         }
+        # Old Android voice recorders send AMR. Some ffmpeg builds (e.g. CI runners) can't encode it; skip those two then.
+        if has_encoder("libopencore_amrnb"):
+            amr = ["-ar", "8000", "-ac", "1", "-c:a", "libopencore_amrnb", "-b:a", "12.2k"]
+            cls.fixtures["3gp"] = (make_tone(f("t.3gp"), 2, amr), "video/3gpp")
+            cls.fixtures["amr"] = (make_tone(f("t.amr"), 2, amr), "audio/amr")
         cls.long_wav = make_tone(f("long.wav"), 40, ["-ar", "8000", "-ac", "1"])
         cls.short_wav = make_tone(f("short.wav"), 0.1, ["-ar", "16000", "-ac", "1"])
 
@@ -172,6 +178,18 @@ class VoiceTestCase(DashboardTestCase):
             return resp, json.loads(raw)
         except ValueError:
             return resp, raw
+
+    def declare_upload(self, port, length, ctype="audio/wav"):
+        """A POST that announces `length` bytes but sends none, for answers given from the headers alone."""
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+        conn.putrequest("POST", "/api/transcribe")
+        conn.putheader("Content-Type", ctype)
+        conn.putheader("Content-Length", str(length))
+        conn.endheaders()
+        resp = conn.getresponse()
+        raw = resp.read()
+        conn.close()
+        return resp, json.loads(raw)
 
     def attempts(self):
         try:
@@ -241,7 +259,12 @@ class FormatTests(VoiceTestCase):
                  (self.fixtures["wav"][0], "text/plain", 415, "unsupported_media_type")]
         for data, ctype, status, code in cases:
             with self.subTest(code=code, ctype=ctype):
-                resp, body = self.upload(port, data, ctype)
+                if code == "too_large":
+                    # The server rejects by Content-Length before reading the body and closes; sending the body
+                    # anyway races that close (BrokenPipe), so declare the size and send no body.
+                    resp, body = self.declare_upload(port, len(data), ctype)
+                else:
+                    resp, body = self.upload(port, data, ctype)
                 self.assertEqual((resp.status, body["error"]["code"]), (status, code))
         self.assertEqual(MockGroq.calls, [])
         self.assertEqual(self.attempts(), 0)
