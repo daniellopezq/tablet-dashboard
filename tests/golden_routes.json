@@ -141,9 +141,9 @@
    },
    "setup_problem": "not_configured",
    "speech": {
-    "available": true,
+    "available": false,
     "enabled": true,
-    "engine": "piper",
+    "engine": null,
     "phrases": {
      "ready": 0,
      "total": 0

@@ -20,8 +20,11 @@ import wave
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import googletts  # noqa: E402
 import tts  # noqa: E402
-from cryptography.hazmat.primitives import serialization  # noqa: E402
-from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
+try:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+except ImportError:  # optional: only the Google voice needs it (Ubuntu package python3-cryptography)
+    raise unittest.SkipTest("cryptography is not installed")
 
 TOKEN_URI = "https://oauth2.example.test/token"
 

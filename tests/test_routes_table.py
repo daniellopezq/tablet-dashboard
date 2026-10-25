@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import ssl
+import subprocess
 import sys
 import tempfile
 import threading
@@ -164,6 +165,9 @@ class RoutesTable(DashboardTestCase):
         base = tempfile.mkdtemp(prefix="routes-base-", dir=self.tmp)
         with mock.patch("server.BASE_DIR", base):
             app = self.make_app()
+        # Pin what depends on this machine: no Piper installed, and Plex running with Jellyfin stopped.
+        app.speaker.cfg["binary"] = os.path.join(base, "no-piper")
+        app.home.runner = lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout="active\ninactive\n")
         app.cfg["bind"], app.cfg["https_port"] = "127.0.0.1", 0
         app.cfg["tls_cert"], app.cfg["tls_key"] = self.certdir + "/server.crt", self.certdir + "/server.key"
         http_port = self.serve(app)

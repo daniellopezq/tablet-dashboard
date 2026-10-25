@@ -16,12 +16,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      # FFmpeg converts voice uploads and camera streams; Pillow composites the weather maps.
+      # FFmpeg converts voice uploads and camera streams; Pillow composites the weather maps;
+      # cryptography signs the optional Google voice's service-account token.
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg
-          python -m pip install pillow
+          python -m pip install pillow cryptography
 
       - name: Run tests
         run: python -m unittest discover -s tests -v
