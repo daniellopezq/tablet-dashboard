@@ -349,10 +349,10 @@ class RouteTests(unittest.TestCase):
             httpd.server_close()
 
     def test_api_calendar_lan_only(self):
-        import server
+        import routes
         import assistant
         self.assertFalse(assistant.is_lan_client("8.8.8.8"))  # the route reuses this check
-        self.assertIn('if path == "/api/calendar":', open(server.__file__).read())
+        self.assertTrue(routes.GET["/api/calendar"][1])  # marked LAN only in the route table
 
 
 class AuthHelperTests(unittest.TestCase):

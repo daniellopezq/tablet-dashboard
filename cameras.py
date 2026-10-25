@@ -44,10 +44,28 @@ from datetime import datetime
 
 import assistant
 import onvif
-from home import ActionError, ID_RE, SERVICE_RE
+from home import ActionError, ID_RE, SERVICE_RE, validate_aliases
 from voice import resolve_ffmpeg
 
 log = logging.getLogger("dashboard.cameras")
+
+_FLAG_CACHE = {}
+
+
+def rtsp_timeout_flag(ffmpeg):
+    """The RTSP socket timeout option: "-stimeout" up to ffmpeg 4.x, "-timeout" from 5.0 (which removed
+    -stimeout; in 4.x -timeout meant "listen for a connection"). Ubuntu's ffmpeg 6.1 replaced the snap's 4.3
+    on PATH on 2026-10-25."""
+    if ffmpeg not in _FLAG_CACHE:
+        major = 0
+        try:
+            out = subprocess.run([ffmpeg, "-hide_banner", "-version"], capture_output=True, timeout=10).stdout
+            m = re.match(rb"ffmpeg version n?(\d+)\.", out)
+            major = int(m.group(1)) if m else 0
+        except (OSError, subprocess.SubprocessError):
+            pass
+        _FLAG_CACHE[ffmpeg] = "-timeout" if major >= 5 else "-stimeout"
+    return _FLAG_CACHE[ffmpeg]
 
 DEFAULT_CAMERAS_CONFIG = {
     "enabled": True,
@@ -60,8 +78,12 @@ DEFAULT_CAMERAS_CONFIG = {
     "live_max_seconds": 600,        # one live view ends after this; the tablet offers to resume
     "blink_proxy_url": "",          # e.g. http://127.0.0.1:8088 (Blink live view; empty = off)
     "blink_proxy_token_name": "BLINK_PROXY_TOKEN",
+    # Background "New snapshot" for cameras with "ai_refresh_seconds", so the assistant's answers about
+    # them are recent. Each one wakes the camera, so only use it on powered cameras.
+    "ai_refresh_enabled": True,
     "list": [],
 }
+AI_REFRESH_MAX_BACKOFF = 600   # seconds between tries after repeated HA/Blink failures
 MAX_CAMERAS = 6  # the Cameras tab shows 2x2, or 3x2 for 5-6 cameras
 MAX_VIEWERS = 4  # live connections per camera
 CAMERA_RE = re.compile(r"^camera\.[a-z0-9_]{1,128}$")
@@ -85,6 +107,8 @@ def validate_camera(c):
         raise ValueError("camera id must be 1-32 of a-z 0-9 _ - (got %r)" % (cid,))
     if not isinstance(c.get("label"), str) or not 1 <= len(c["label"]) <= 40:
         raise ValueError("camera %r: label must be 1-40 characters" % cid)
+    if "aliases" in c:
+        validate_aliases("camera %r" % cid, c["aliases"])
     kind = c.get("type", "ha")
     if kind == "rtsp":
         if not isinstance(c.get("rtsp_url"), str) or not RTSP_RE.match(c["rtsp_url"]):
@@ -105,7 +129,8 @@ def validate_camera(c):
                 raise ValueError("camera %r: %s must be true or false" % (cid, key))
             if c.get(key) and "onvif_url" not in c:
                 raise ValueError("camera %r: %s needs onvif_url" % (cid, key))
-        for key in ("entity_id", "motion_entity", "battery_entity", "popup", "snapshot", "snapshot_service"):
+        for key in ("entity_id", "motion_entity", "battery_entity", "popup", "snapshot", "snapshot_service",
+                    "ai_refresh_seconds"):
             if key in c:
                 raise ValueError("camera %r: %s is for Home Assistant cameras, not rtsp" % (cid, key))
         return
@@ -126,6 +151,12 @@ def validate_camera(c):
     svc = c.get("snapshot_service", "blink.trigger_camera")
     if not isinstance(svc, str) or not SERVICE_RE.match(svc):
         raise ValueError("camera %r: snapshot_service must look like blink.trigger_camera" % cid)
+    if "ai_refresh_seconds" in c:
+        r = c["ai_refresh_seconds"]
+        if not isinstance(r, int) or isinstance(r, bool) or not 60 <= r <= 3600:
+            raise ValueError("camera %r: ai_refresh_seconds must be an integer 60-3600" % cid)
+        if not c.get("snapshot", True):
+            raise ValueError("camera %r: ai_refresh_seconds needs snapshots turned on" % cid)
 
 
 def validate_cameras_config(c):
@@ -138,6 +169,8 @@ def validate_cameras_config(c):
             raise ValueError("cameras.%s must be a number %s-%s" % (key, lo, hi))
     if not isinstance(c["ffmpeg_path"], str) or not c["ffmpeg_path"]:
         raise ValueError("cameras.ffmpeg_path must be a program name or path")
+    if not isinstance(c["ai_refresh_enabled"], bool):
+        raise ValueError("cameras.ai_refresh_enabled must be true or false")
     if not isinstance(c["blink_proxy_url"], str) or (c["blink_proxy_url"] and not PROXY_RE.match(c["blink_proxy_url"])):
         raise ValueError("cameras.blink_proxy_url must be empty or look like http://127.0.0.1:8088")
     if not isinstance(c["blink_proxy_token_name"], str) or not re.match(r"^[A-Z][A-Z0-9_]{1,63}$", c["blink_proxy_token_name"]):
@@ -186,6 +219,7 @@ class LiveFeed:
         self.error = None          # why the last ffmpeg ended, for the tablet
 
     def command(self):
+        ffmpeg = resolve_ffmpeg(self.cfg["ffmpeg_path"])
         if self.url.startswith("http://"):
             # Headers on the command line, not in the URL: ffmpeg's errors (shown on the page) quote the URL.
             extra = "".join("%s: %s\r\n" % kv for kv in (self.headers() if self.headers else {}).items())
@@ -193,8 +227,8 @@ class LiveFeed:
             source = (["-headers", extra] if extra else []) + ["-rw_timeout", "15000000", "-i", self.url,
                                                               "-vf", "scale=-2:'min(720,ih)'"]
         else:
-            source = ["-rtsp_transport", "tcp", "-stimeout", "5000000", "-i", self.url]
-        return [resolve_ffmpeg(self.cfg["ffmpeg_path"]), "-hide_banner", "-nostdin", "-loglevel", "error"] + source + [
+            source = ["-rtsp_transport", "tcp", rtsp_timeout_flag(ffmpeg), "5000000", "-i", self.url]
+        return [ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error"] + source + [
                 "-an", "-r", str(self.cam.get("live_fps", 10)), "-c:v", "mjpeg", "-q:v", "6",
                 "-f", "image2pipe", "-"]
 
@@ -393,6 +427,10 @@ class Cameras:
         self._blink_token = blink_token or self._blink_token_from_env
         self._blink_feeds = {c["id"]: LiveFeed(c, cfg, self._blink_url(c), c["id"] + " blink", headers=self._blink_headers)
                              for c in cfg["list"] if c.get("type", "ha") == "ha" and c.get("blink_live")}
+        self._stop = threading.Event()
+        self._refresh_thread = None
+        self._refresh_next = {}   # id -> clock() time of the next background snapshot
+        self._refresh_fails = {}  # id -> consecutive failures (backoff)
 
     def _blink_url(self, cam):
         # The proxy ends its session after `seconds` whatever happens; a little longer than one viewer may watch.
@@ -515,8 +553,104 @@ class Cameras:
         return feed.error if feed else None
 
     def close(self):
+        self._stop.set()
         for feed in list(self._feeds.values()) + list(self._hd_feeds.values()) + list(self._blink_feeds.values()):
             feed.stop()
+
+    # --- assistant ----------------------------------------------------------------------
+
+    def ai_cameras(self):
+        """[{id, label, aliases, live}] for the assistant (which cameras it may look at)."""
+        if not self.cfg["enabled"]:
+            return []
+        return [{"id": c["id"], "label": c["label"], "aliases": list(c.get("aliases", [])),
+                 "live": c["id"] in self._feeds} for c in self.cfg["list"]]
+
+    def _ha_updated(self, cam):
+        rows = self.home.ha_rows(fresh=True) or {}
+        return (rows.get(cam["entity_id"]) or {}).get("last_updated")
+
+    def frame_for_ai(self, cid, max_age=60, wait_seconds=12):
+        """(jpeg/png bytes, content type, age in seconds or None) of what the camera sees now.
+        RTSP: a live frame (HD feed when there is one). Home Assistant: its snapshot, after asking for a
+        new one first when it is older than max_age (and the camera allows it). Raises ActionError."""
+        cam = self._camera(cid)
+        if cid in self._feeds:
+            if cid in self._hd_feeds:
+                try:
+                    return self._hd_feeds[cid].still(), "image/jpeg", 0
+                except ActionError as exc:
+                    log.info("cameras: HD frame for the assistant failed (%s), using SD: %s", cid, exc)
+            return self._feeds[cid].still(), "image/jpeg", 0
+        before = self._ha_updated(cam)
+        age = self._age(before)
+        if (age is None or age > max_age) and cam.get("snapshot", True):
+            try:
+                self.request_snapshot(cid)
+            except ActionError as exc:
+                if exc.code != 429:
+                    log.info("cameras: snapshot for the assistant failed (%s): %s", cid, exc)
+            else:
+                for _ in range(max(1, int(wait_seconds / 1.5))):
+                    self.sleep(1.5)
+                    try:
+                        self.home.ha_service("homeassistant.update_entity", cam["entity_id"])
+                    except ActionError:
+                        pass
+                    now_updated = self._ha_updated(cam)
+                    if now_updated and now_updated != before:
+                        before = now_updated
+                        break
+                age = self._age(before)
+        data, ctype = self.home.ha_image(cam["entity_id"])
+        return data, ctype, age
+
+    def _age(self, iso):
+        ms = _iso_ms(iso)
+        return None if ms is None else max(0, int(self.clock() - ms / 1000))
+
+    def start_ai_refresh(self):
+        """Background snapshots for cameras with ai_refresh_seconds (see DEFAULT_CAMERAS_CONFIG)."""
+        if self._refresh_thread is not None or not any(c.get("ai_refresh_seconds") for c in self.cfg["list"]):
+            return
+        self._refresh_thread = threading.Thread(target=self._refresh_loop, name="camera-ai-refresh", daemon=True)
+        self._refresh_thread.start()
+
+    def _refresh_loop(self):
+        while not self._stop.wait(5):
+            try:
+                self.refresh_due()
+            except Exception:  # never let the loop die
+                log.exception("cameras: background refresh crashed")
+
+    def refresh_due(self):
+        """One pass of the background refresh: snapshot every camera whose time has come."""
+        if not (self.cfg["enabled"] and self.cfg["ai_refresh_enabled"]):
+            return
+        now = self.clock()
+        for c in self.cfg["list"]:
+            every = c.get("ai_refresh_seconds")
+            if not every or not c.get("snapshot", True):
+                continue
+            cid = c["id"]
+            if now < self._refresh_next.get(cid, 0.0):
+                continue
+            try:
+                self.request_snapshot(cid)
+            except ActionError as exc:
+                if exc.code == 429:  # someone pressed New snapshot recently: that counts
+                    self._refresh_next[cid] = now + every
+                    continue
+                fails = self._refresh_fails.get(cid, 0) + 1
+                self._refresh_fails[cid] = fails
+                delay = min(every * (2 ** fails), AI_REFRESH_MAX_BACKOFF)
+                if fails == 1:
+                    log.warning("cameras: background snapshot of %s failed (%s); retrying with backoff", cid, exc)
+                self._refresh_next[cid] = now + delay
+                continue
+            if self._refresh_fails.pop(cid, 0):
+                log.info("cameras: background snapshots of %s work again", cid)
+            self._refresh_next[cid] = now + every
 
     def _lost(self, cam):
         """on_failure hook for a camera's feeds: look for it in the background (if it has a "mac")."""

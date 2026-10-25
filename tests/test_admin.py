@@ -1,4 +1,4 @@
-"""Tests for the admin panel (admin.py and its routes in server.py).
+"""Tests for the admin panel (admin/ and its routes in routes/admin_api.py).
 
 The admin listener is a plain-http DashboardServer flagged is_tls=True (the flag is what the
 handler checks), so no certificates are needed. All files live in a temp directory; nothing leaves
@@ -316,7 +316,7 @@ class OfflineTests(AdminTestCase):
     def test_weather_fetch_fails_while_simulated(self):
         self.sim.turn_on(["weather"], "instant", 5)
         w = server.WeatherService(dict(server.DEFAULT_CONFIG["weather"], latitude=1.0, longitude=2.0,
-                                       api_url="http://127.0.0.1:9/"))
+                                       api_url="http://127.0.0.1:9/"), server.USER_AGENT)
         with self.assertLogs("dashboard", "WARNING"):
             self.assertFalse(w.fetch_once())
         self.assertEqual(w.snapshot()["error"], "network error")

@@ -1,9 +1,12 @@
-// Ask: standalone questions (nothing is kept between questions), typed or spoken.
+// Ask: questions, home commands ("apaga el abanico") and camera questions, typed or spoken, with spoken
+// answers (Piper on the server). The server remembers the last few turns of this conversation for ~2 minutes;
+// Clear starts a new one. Home actions that need a yes (alarm, media switch) are confirmed in a dialog.
 // Voice: tap once, speak, and it stops by itself after a pause (same rules as the tablet), then the
 // recording is transcribed and asked. MediaRecorder needs a secure page (https or localhost);
 // elsewhere the button opens the phone's recorder through a file input.
-import { h, icon, replace, card } from '../lib/dom.js';
+import { h, icon, replace, card, confirmDialog } from '../lib/dom.js';
 import { getJSON, postJSON, request } from '../lib/api.js';
+import { refreshSoon } from '../lib/store.js';
 import { onTick } from '../lib/clock.js';
 
 const ASK_TIMEOUT_MS = 45000;
@@ -29,7 +32,71 @@ const s = {
   httpsPort: null,
   vstate: 'idle',  // idle | starting | recording | sending
   rec: null,       // { recorder, stream, ctx, timer, chunks, spoke, silentMs, noise, started }
+  conv: newConversation(),
+  speak: readSpeak(),
+  speechOk: false,
+  audio: null,     // AudioContext, created inside a tap so the answer may play later
+  playing: null,
 };
+
+function newConversation() {
+  return ('c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10)).slice(0, 24);
+}
+function readSpeak() {
+  try { return localStorage.getItem('dashboard.aiSpeak') !== '0'; } catch { return true; }
+}
+
+// ---- spoken answers ----
+function unlockAudio() {
+  if (!s.speak || !s.speechOk) return;
+  try {
+    s.audio ??= new (window.AudioContext || window.webkitAudioContext)();
+    if (s.audio.state === 'suspended') s.audio.resume();
+  } catch { s.audio = null; }
+}
+function stopSpeech() {
+  try { s.playing?.stop(); } catch { /* already ended */ }
+  s.playing = null;
+}
+async function playSpeech(id) {
+  if (!s.audio || !s.speak) return;
+  const token = s.token;
+  try {
+    const resp = await fetch(`/api/tts/${encodeURIComponent(id)}.wav`, { cache: 'no-store' });
+    if (!resp.ok || token !== s.token) return;
+    const buffer = await s.audio.decodeAudioData(await resp.arrayBuffer());
+    if (token !== s.token) return;
+    stopSpeech();
+    const src = s.audio.createBufferSource();
+    src.buffer = buffer;
+    src.connect(s.audio.destination);
+    src.start();
+    s.playing = src;
+  } catch { /* the text is on screen anyway */ }
+}
+function toggleSpeak() {
+  s.speak = !s.speak;
+  try { localStorage.setItem('dashboard.aiSpeak', s.speak ? '1' : '0'); } catch { /* private mode */ }
+  if (s.speak) unlockAudio(); else stopSpeech();
+  update({});
+}
+
+async function confirmAction(c) {
+  const yes = await confirmDialog({ title: `${c.title}?`, body: 'Asked in Ask.', yes: 'Yes' });
+  if (!yes) return;
+  unlockAudio();
+  const token = ++s.token;
+  try {
+    const data = await postJSON('/api/assistant/confirm', { token: c.token, conversation: s.conv, speak: s.speak && s.speechOk },
+      { timeout: 15000 });
+    if (token !== s.token) return;
+    update({ answer: data.answer, answerCls: '' });
+    if (data.speech_id) playSpeech(data.speech_id);
+  } catch (err) {
+    update({ answer: err.body?.error?.message || 'Couldn’t reach the server.', answerCls: 'error' });
+  }
+  refreshSoon('home', 500);
+}
 const views = new Set();  // render functions of mounted views
 
 function update(patch) {
@@ -42,7 +109,7 @@ const setAnswer = (answer, answerCls = '') => update({ answer, answerCls });
 function idleText() {
   if (!s.ai.enabled) return 'The assistant is turned off on the server.';
   if (s.ai.configured === false) return 'The assistant isn’t set up yet. Add the API key on the admin page.';
-  return 'Answers appear here. Each question starts fresh.';
+  return 'Answers appear here. Try “apaga el abanico” or “what do you see on the street?”.';
 }
 
 async function loadStatus() {
@@ -50,6 +117,7 @@ async function loadStatus() {
     const [a, v] = await Promise.all([getJSON('/api/assistant/status'), getJSON('/api/voice/status').catch(() => null)]);
     s.ai = { enabled: a.enabled !== false, configured: !!a.configured, maxChars: a.max_question_chars || 1000,
       minInterval: a.min_interval_seconds || 0, left: a.remaining ?? null };
+    s.speechOk = !!a.speech?.available;
     if (a.blocked) {
       s.blockedUntil = Date.now() + a.blocked_retry_after * 1000;
       if (!s.inFlight) Object.assign(s, { status: 'Temporarily unavailable (credits or access).', statusCls: 'warn' });
@@ -73,20 +141,27 @@ async function ask() {
   if (q.length > s.ai.maxChars) return setStatus(`Too long: ${s.ai.maxChars} characters at most.`, 'warn');
   if (s.blockedUntil > Date.now()) return;
   const token = ++s.token;
+  stopSpeech();
   update({ inFlight: true, status: '', statusCls: '', answer: 'Thinking…', answerCls: 'muted' });
   try {
-    const data = await postJSON('/api/assistant', { question: q }, { timeout: ASK_TIMEOUT_MS });
+    const data = await postJSON('/api/assistant', { question: q, conversation: s.conv, speak: s.speak && s.speechOk },
+      { timeout: ASK_TIMEOUT_MS });
     if (token !== s.token) return;  // cleared while waiting
     s.ai.left = data.remaining ?? s.ai.left;
-    s.blockedUntil = Date.now() + s.ai.minInterval * 1000;
+    // House commands are answered on the server without the AI, so they don't count against the wait.
+    if (data.source !== 'house') s.blockedUntil = Date.now() + s.ai.minInterval * 1000;
+    const note = { local: 'Local fallback (small model, may be wrong)', offline: 'No internet for the cameras' }[data.source] ?? '';
     update({
       inFlight: false,
       answer: data.answer + (data.truncated ? '\n\n(The answer was cut off at the length limit.)' : ''),
       answerCls: '',
       // The cloud didn't answer, so a small model on the server did: say so, it can be wrong.
-      status: data.source === 'local' ? 'Local fallback (small model, may be wrong)' : '',
-      statusCls: data.source === 'local' ? 'warn' : '',
+      status: note,
+      statusCls: note ? 'warn' : '',
     });
+    if (data.actions_done?.length) refreshSoon('home', 500);
+    if (data.speech_id) playSpeech(data.speech_id);
+    if (data.confirm?.token) confirmAction(data.confirm);
   } catch (err) {
     if (token !== s.token) return;
     const e = err.body?.error ?? {};
@@ -110,6 +185,8 @@ async function ask() {
 
 function clearAll() {
   cancelVoice();
+  stopSpeech();
+  s.conv = newConversation();
   s.token += 1;
   update({ question: '', inFlight: false, answer: idleText(), answerCls: 'muted', status: '', statusCls: '' });
 }
@@ -124,10 +201,18 @@ function httpsLink() {
 }
 
 async function startVoice(fileInput) {
+  unlockAudio();  // inside the tap, so the spoken answer may play later
   if (s.vstate === 'recording') return finishVoice('tap');
   if (s.vstate !== 'idle' || s.inFlight) return;
   if (s.voice.configured === false) return setStatus('Voice input isn’t set up on the server.', 'warn');
-  if (!canRecord()) { fileInput.click(); return; }  // phone recorder or file chooser
+  if (!canRecord()) {
+    // Browsers only allow the microphone on https: go to the secure address (Voice works there with one tap).
+    // The phone's recorder app is the fallback only when there is no https address.
+    const link = httpsLink();
+    if (link) { location.href = link; return; }
+    fileInput.click();  // phone recorder or file chooser
+    return;
+  }
   update({ vstate: 'starting', status: 'Starting the microphone…', statusCls: '' });
   let stream;
   try {
@@ -270,8 +355,9 @@ function build(compact) {
   });
   const voiceBtn = h('button', { type: 'button', class: 'ai-voice', onclick: () => startVoice(fileInput) },
     icon('mic', 'ai-mic'), h('span', null, 'Voice'));
-  const askBtn = h('button', { type: 'button', class: 'btn ai-ask', onclick: ask }, 'Ask');
+  const askBtn = h('button', { type: 'button', class: 'btn ai-ask', onclick: () => { unlockAudio(); ask(); } }, 'Ask');
   const clearBtn = h('button', { type: 'button', class: 'btn btn-quiet', onclick: clearAll }, 'Clear');
+  const speakBtn = h('button', { type: 'button', class: 'btn btn-quiet', onclick: toggleSpeak }, 'Sound on');
   const answer = h('div', { class: 'ai-answer', 'aria-live': 'polite' });
   const status = h('p', { class: 'ai-status' });
   const meta = h('p', { class: 'meta ai-meta' });
@@ -285,6 +371,9 @@ function build(compact) {
     voiceBtn.classList.toggle('recording', s.vstate === 'recording');
     voiceBtn.lastChild.textContent = { recording: 'Stop', starting: 'Mic…', sending: 'Sending…' }[s.vstate] ?? 'Voice';
     voiceBtn.disabled = s.vstate === 'starting' || s.vstate === 'sending' || s.inFlight;
+    speakBtn.hidden = !s.speechOk;
+    speakBtn.textContent = s.speak ? 'Sound on' : 'Sound off';
+    speakBtn.setAttribute('aria-pressed', String(s.speak));
     const left = s.ai.left;
     meta.textContent = [`${s.question.length}/${s.ai.maxChars}`, left && `${left.hour} left this hour · ${left.day} today`]
       .filter(Boolean).join(' · ');
@@ -304,7 +393,7 @@ function build(compact) {
   }
 
   const controls = h('div', { class: 'ai-controls' }, voiceBtn, h('div', { class: 'ai-field' }, input,
-    h('div', { class: 'ai-buttons' }, askBtn, !compact && clearBtn)), fileInput);
+    h('div', { class: 'ai-buttons' }, askBtn, !compact && clearBtn, !compact && speakBtn)), fileInput);
   const el = compact
     ? h('div', { class: 'ai-card' }, controls, status, answer)
     : h('div', { class: 'view-ask' }, h('h1', { class: 'view-title' }, 'Ask'), controls, status, answer, meta);

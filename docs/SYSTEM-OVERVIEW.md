@@ -2,7 +2,7 @@
 
 An old Android tablet repurposed as an always-on home dashboard: clock, weather, weather maps, a calendar agenda, an AI assistant you can ask by voice, Home Assistant controls, security cameras and an uptime board. A small Python server on a home Linux box does all the work. The tablet only displays a web page. Since 0.15.0 the same address also gives phones and PCs a modern, responsive version of every section.
 
-*Updated 2026-10-22 for version 0.21.2.*
+*Updated 2026-10-25 for version 0.25.1.*
 
 Details live elsewhere: configuration, routes and the admin page in the [README](../README.md); admin internals in [ADMIN-PANEL.md](ADMIN-PANEL.md); local AI in [LOCAL-FALLBACK-ARCHITECTURE.md](LOCAL-FALLBACK-ARCHITECTURE.md) and [LOCAL-AI-BENCHMARKS.md](LOCAL-AI-BENCHMARKS.md).
 
@@ -37,7 +37,9 @@ Phones and PCs on the home network are extra clients. They get the modern view (
 | Weather | Open-Meteo (no key) | Cached server-side and refreshed every 15 minutes; marked stale after 35 minutes |
 | Weather maps | OpenWeatherMap tiles + OpenStreetMap base | Precipitation, clouds, wind and temperature layers, composited with Pillow and rotated every 10 seconds |
 | Calendar | Google Calendar API, read-only | OAuth desktop flow; the token stays on the server |
-| Ask | Vercel AI Gateway → `gemini-2.5-flash-lite` | Standalone questions, no history; answers shown in large text, one page at a time |
+| Ask | Vercel AI Gateway → `gemini-2.5-flash-lite` | Questions with a 2-minute memory; answers shown in large text, one page at a time |
+| Ask the house | `homeai.py` + Home Assistant + cameras | "Apaga el abanico", "¿qué está prendido?" answered without the AI; other requests become JSON actions limited to the Home tiles; alarm/media switch confirmed on the server; "¿qué ves en la calle?" sends one camera picture to the cloud model (0.22.0) |
+| Spoken answers | Google Cloud TTS, Chirp 3 HD "Achernar" (0.25.0), Piper (local, CPU) as fallback | es_MX or en_US voice picked from the answer, ~0.7 s per sentence, played through Web Audio after the Ask/Voice tap (0.22.0); fixed home replies pre-rendered in `data/tts-phrases/` and played at once (0.24.0) |
 | Voice | Groq `whisper-large-v3-turbo` | One tap records, silence ends the recording, then the question is asked automatically |
 | Local fallback | Qwen3.5-2B on CPU, whisper base on GPU | Takes over Ask and Voice only when the cloud doesn't respond at all |
 | Admin page | `https://<server>:8443/admin`, LAN only | Password sign-in; API keys, AI models (cloud and local), Google sign-in, health and Uptime Kuma, settings, logs, maintenance, offline test switch |
@@ -58,8 +60,8 @@ flowchart LR
 
   subgraph Server ["Home server (systemd user services)"]
     UI["uidetect.py<br/>picks the page for /"] --> S
-    S["server.py<br/>Python stdlib"]
-    S --> W[weather fetcher]
+    S["server.py + routes/<br/>Python stdlib"]
+    S --> W["weather.py"]
     S --> M["maps.py<br/>Pillow"]
     S --> C[gcal.py]
     S --> A[assistant.py]
@@ -67,7 +69,10 @@ flowchart LR
     S --> HM["home.py"]
     S --> CM["cameras.py<br/>ffmpeg RTSP → MJPEG<br/>onvif.py controls"]
     A & V --> F["fallback.py"]
-    S --> AD["admin.py<br/>+ health.py, localai.py, netsim.py"]
+    A --> HAI["homeai.py<br/>matcher, actions, confirm"]
+    HAI --> HM & CM
+    A --> TTS["tts.py<br/>Piper, CPU"]
+    S --> AD["admin/<br/>+ health.py, localai.py, netsim.py"]
     AD -. "settings, keys, start/stop" .-> A & V & L
     N["netsim.py<br/>offline test"] -. "simulated outage" .-> F
     F -. "loopback only" .-> L["llama-server :8091<br/>Qwen3.5-2B, CPU"]
@@ -87,7 +92,7 @@ flowchart LR
   AD --> K["Uptime Kuma<br/>/metrics"]
 ```
 
-- **Backend:** Python 3 standard library, plus Pillow for the maps. There are no frameworks and no build step. Each integration is one module.
+- **Backend:** Python 3 standard library, plus Pillow for the maps. There are no frameworks and no build step. Each integration is one module. `server.py` only wires the services together and runs the listeners; URLs are mapped in one table in `routes/__init__.py` (with a LAN-only flag per route), and the response helpers that enforce the CSP, Range requests and safe file paths are in `httpcore.py`. FastAPI was considered in 2026-10 and rejected: it would add dependencies and replace tested security code for no gain at this load.
 - **Two front ends, one API:** `GET /` sends the classic page (`web/`, ES5) to old browsers such as the tablet's Chrome 50 and the modern page (`web-modern/`, ES modules, served under `/m/`) to everything else. `uidetect.py` decides from the User-Agent, with `?ui=classic|modern|auto` and a `ui` cookie as overrides; a modern page that can't run falls back to classic by itself. Both pages use the same `/api/*` routes, so new features never have to hold back the old page and phones never have to run the tablet's constrained layout. Neither uses `innerHTML` or inline script (strict CSP).
 - **Process management:** two systemd *user* services (lingering on, so no login is needed): `tablet-dashboard` (`Restart=always`, 5 s) and `tablet-local-ai`. `scripts/start.sh` and `stop.sh` call `systemctl --user` when they are installed (`scripts/install-autostart.sh`).
 - **Secrets:** stored only in `.env` (mode 600). They are never sent to the browser, never kept in config, and never committed.
@@ -155,9 +160,12 @@ flowchart LR
 | Each Blink live view is a cloud session, and the proxy allows a new one only about 30 s after the last | Blink live starts only on a tap. Leaving, changing tabs or hiding the page stops it and forgets it, so a woken screen doesn't start a new session. |
 | ffmpeg error messages quote the URL, and those messages reach the page | The Blink proxy token goes in an `Authorization` header, never in the URL. |
 
-## 6. Current status (version 0.21.2)
+## 6. Current status (version 0.25.1)
 
 - **Working:** every section on the old tablet (clock, weather, maps, Home, Cameras with RTSP live view and ONVIF controls, Calendar, Uptime, Ask, one-tap Voice over https), the modern view for phones and PCs, the local AI fallback, the admin page, and autostart with crash recovery.
+- **Ask the house (0.22.0–0.25.0):** home commands and questions, camera questions and spoken answers (Piper, or Google Cloud TTS with Piper as the fallback, plus a saved phrase bank for fixed replies). Tested with mocks and in headless Chrome; spoken answers on the tablet's Chrome 50 still need checking on the device.
+- **Code layout (0.21.3):** `server.py` and `admin.py` were split into modules (`config.py`, `weather.py`, `httpcore.py`, `routes/`, `admin/`) with no behaviour change, checked by a route-by-route golden test.
+- **Tests:** 327 automated tests, run by GitHub Actions on every push.
 - **Not yet measured or verified:** the fallback under a media-server stream, real tablet microphone recordings in noisy rooms, the modern view on a range of real phones, and a full reboot cycle with autostart.
 - **Planned:** sound for RTSP live view (the camera's audio as a separate stream), recording RTSP cameras to disk, kiosk mode, admin alerts (ntfy or email), and an authenticated way to reach the dashboard from outside the LAN.
 - **If you use Google Calendar:** while your Google Cloud app is in Testing, the sign-in expires every 7 days. Publish the app ("In production"; unverified is fine for personal use), or reconnect from the admin page.

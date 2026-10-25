@@ -69,6 +69,10 @@
     "buttons": [
       {
         "id": "movie",
+        "aliases": [
+          "movie night",
+          "noche de pelicula"
+        ],
         "label": "Movie night",
         "kind": "ha",
         "icon": "media",
@@ -77,6 +81,10 @@
       },
       {
         "id": "lamp",
+        "aliases": [
+          "lampara",
+          "living room lamp"
+        ],
         "label": "Lamp",
         "kind": "ha",
         "icon": "light",
@@ -86,6 +94,10 @@
       },
       {
         "id": "fan",
+        "aliases": [
+          "ventilador",
+          "abanico"
+        ],
         "label": "Fan",
         "kind": "ha",
         "icon": "fan",
@@ -95,6 +107,10 @@
       },
       {
         "id": "alarm",
+        "aliases": [
+          "alarma",
+          "security"
+        ],
         "label": "Alarm",
         "kind": "ha",
         "icon": "shield",
@@ -114,6 +130,12 @@
     "list": [
       {
         "id": "door",
+        "aliases": [
+          "puerta",
+          "entrada",
+          "doorbell"
+        ],
+        "ai_refresh_seconds": 60,
         "label": "Front door",
         "entity_id": "camera.front_door",
         "blink_live": "front_door",
@@ -123,6 +145,10 @@
       },
       {
         "id": "garage",
+        "aliases": [
+          "cochera",
+          "driveway"
+        ],
         "label": "Garage",
         "type": "rtsp",
         "rtsp_url": "rtsp://192.168.1.20:554/live/ch00_1",
@@ -132,5 +158,13 @@
         "live_fps": 10
       }
     ]
+  },
+  "database": {
+    "_comment": "Optional history in a local PostgreSQL through the psql client (peer login, no password; setup in pgstore.py). Off by default.",
+    "enabled": false
+  },
+  "tts": {
+    "_comment": "Spoken Ask answers. 'piper' = local Piper voices (scripts/install-piper.sh); 'google' = Google Cloud TTS with a service-account key, Piper as the fallback.",
+    "engine": "piper"
   }
 }

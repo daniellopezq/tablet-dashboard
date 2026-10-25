@@ -318,6 +318,7 @@ button {
 .ai-btn:active { background: #263445; }
 .ai-btn.primary:active { background: #1858c0; }
 .ai-btn[disabled] { opacity: 0.5; }
+.ai-btn.is-off { color: #8b949e; }
 /* Voice: one big target for the tablet's weak touchscreen. Block layout inside the button,
    because Chrome 50 cannot make a <button> a flex container. */
 .ai-voice {

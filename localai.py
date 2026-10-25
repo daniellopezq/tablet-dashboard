@@ -291,9 +291,9 @@ def _cli(argv):
     if argv != ["env"]:
         print(_cli.__doc__)
         return 2
-    import server  # local import: config loading lives there
-    cfg = server.load_config(os.path.join(server.BASE_DIR, "config.json"))
-    for line in LocalAI(cfg["local_ai"], server.BASE_DIR, None, None).env_lines():
+    import config  # local import: the dashboard's config loader
+    cfg = config.load_config(os.path.join(config.BASE_DIR, "config.json"))
+    for line in LocalAI(cfg["local_ai"], config.BASE_DIR, None, None).env_lines():
         print(line)
     return 0
 

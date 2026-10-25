@@ -1,0 +1,1284 @@
+{
+ "http DELETE /api/time {} e3b0c44298fc": {
+  "body_sha256": "669bb658059b0d13e583d42c2de2a8b0988a64c2febec0f8b47a963b9780d5a6",
+  "headers": {
+   "allow": "GET, HEAD",
+   "connection": "close",
+   "content-length": "19",
+   "content-type": "text/plain; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 405
+ },
+ "http GET / {} e3b0c44298fc": {
+  "body_sha256": "063f26d1f29721aec0c977e87843553644725169f8acc4064c3695956cf14bad",
+  "headers": {
+   "cache-control": "no-cache",
+   "content-length": "36",
+   "content-security-policy": "default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+   "content-type": "text/html; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "vary": "User-Agent, Cookie",
+   "x-content-type-options": "nosniff",
+   "x-frame-options": "DENY"
+  },
+  "status": 200
+ },
+ "http GET /%2e%2e/outside.txt {} e3b0c44298fc": {
+  "body_sha256": "493fda53120050f85836032324409be6c6484f90a0755ae0c6a673ba7626818b",
+  "headers": {
+   "cache-control": "no-store",
+   "content-length": "10",
+   "content-type": "text/plain; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 404
+ },
+ "http GET /../server.py {} e3b0c44298fc": {
+  "body_sha256": "493fda53120050f85836032324409be6c6484f90a0755ae0c6a673ba7626818b",
+  "headers": {
+   "cache-control": "no-store",
+   "content-length": "10",
+   "content-type": "text/plain; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 404
+ },
+ "http GET /.hidden.js {} e3b0c44298fc": {
+  "body_sha256": "493fda53120050f85836032324409be6c6484f90a0755ae0c6a673ba7626818b",
+  "headers": {
+   "cache-control": "no-store",
+   "content-length": "10",
+   "content-type": "text/plain; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 404
+ },
+ "http GET /admin {} e3b0c44298fc": {
+  "body_sha256": "493fda53120050f85836032324409be6c6484f90a0755ae0c6a673ba7626818b",
+  "headers": {
+   "cache-control": "no-store",
+   "content-length": "10",
+   "content-type": "text/plain; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 404
+ },
+ "http GET /admin.js {} e3b0c44298fc": {
+  "body_sha256": "493fda53120050f85836032324409be6c6484f90a0755ae0c6a673ba7626818b",
+  "headers": {
+   "cache-control": "no-store",
+   "content-length": "10",
+   "content-type": "text/plain; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 404
+ },
+ "http GET /api/admin/session {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": "not found",
+   "ok": false
+  },
+  "status": 404
+ },
+ "http GET /api/assistant {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": "not found"
+  },
+  "status": 404
+ },
+ "http GET /api/assistant/status {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "blocked": false,
+   "blocked_retry_after": 0,
+   "configured": false,
+   "enabled": true,
+   "fallback": {
+    "cloud_cooling_down": false,
+    "enabled": true
+   },
+   "home_control": true,
+   "limits": {
+    "per_day": 100,
+    "per_hour": 20
+   },
+   "max_question_chars": 1000,
+   "min_interval_seconds": 10,
+   "model": "google/gemini-2.5-flash-lite",
+   "remaining": {
+    "day": 100,
+    "hour": 20
+   },
+   "setup_problem": "not_configured",
+   "speech": {
+    "available": true,
+    "enabled": true,
+    "engine": "piper",
+    "phrases": {
+     "ready": 0,
+     "total": 0
+    }
+   }
+  },
+  "status": 200
+ },
+ "http GET /api/calendar {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "count": 0,
+   "days": null,
+   "days_ahead": 7,
+   "enabled": true,
+   "last_attempt_ms": null,
+   "message": "",
+   "problem": null,
+   "stale": false,
+   "status": "loading",
+   "timezone": "UTC",
+   "truncated": false,
+   "updated_ms": "<volatile>"
+  },
+  "status": 200
+ },
+ "http GET /api/cameras {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "alert": null,
+   "cameras": [],
+   "enabled": true,
+   "live_max_seconds": 600,
+   "popup_seconds": 60
+  },
+  "status": 200
+ },
+ "http GET /api/cameras/BAD! {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": "not found"
+  },
+  "status": 404
+ },
+ "http GET /api/cameras/nope.jpg {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": "unknown camera"
+  },
+  "status": 404
+ },
+ "http GET /api/cameras/nope/controls {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": "unknown camera"
+  },
+  "status": 404
+ },
+ "http GET /api/cameras/nope/live.mjpg {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": "unknown camera"
+  },
+  "status": 404
+ },
+ "http GET /api/config {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "calendar_enabled": true,
+   "cameras_enabled": false,
+   "clock_default_24h": true,
+   "home_enabled": true,
+   "https_port": 0,
+   "maps_configured": false,
+   "offline_test": [],
+   "temperature_unit": "C",
+   "timezone": "UTC",
+   "version": "<volatile>",
+   "weather_configured": false
+  },
+  "status": 200
+ },
+ "http GET /api/home {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "buttons": [
+    {
+     "confirm": true,
+     "icon": "",
+     "id": "media",
+     "kind": "media_switch",
+     "label": "Media server",
+     "media": {
+      "current": "plex",
+      "error": null,
+      "jellyfin": "inactive",
+      "plex": "active",
+      "switching": null
+     }
+    }
+   ],
+   "enabled": true,
+   "ha_error": null,
+   "ha_ok": true
+  },
+  "status": 200
+ },
+ "http GET /api/maps {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "attribution": [
+    {
+     "text": "Weather maps © OpenWeather",
+     "url": "https://openweathermap.org/"
+    },
+    {
+     "text": "Map © OpenStreetMap contributors",
+     "url": "https://www.openstreetmap.org/copyright"
+    }
+   ],
+   "calls_since_start": 0,
+   "configured": false,
+   "error": null,
+   "label": "",
+   "last_attempt_ms": null,
+   "layers": [],
+   "rotate_seconds": 10,
+   "status": "unconfigured"
+  },
+  "status": 200
+ },
+ "http GET /api/time {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "abbreviation": "UTC",
+   "local_iso": "<volatile>",
+   "now_ms": "<volatile>",
+   "timezone": "UTC",
+   "utc_offset": "+00:00",
+   "utc_offset_minutes": 0
+  },
+  "status": 200
+ },
+ "http GET /api/tts/AAAAAAAAAAAAAAAAAAAAAAAA.wav {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": "speech_unavailable"
+  },
+  "status": 404
+ },
+ "http GET /api/tts/bad.wav {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": "not_found"
+  },
+  "status": 404
+ },
+ "http GET /api/unknown {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": "not found"
+  },
+  "status": 404
+ },
+ "http GET /api/uptime {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "checks": [],
+   "counts": {
+    "fail": 0,
+    "ok": 0,
+    "unknown": 0,
+    "warn": 0
+   },
+   "enabled": true,
+   "interval_seconds": 60,
+   "kuma_ok": null,
+   "last_run_ms": null
+  },
+  "status": 200
+ },
+ "http GET /api/voice/status {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "auto_ask": true,
+   "configured": false,
+   "enabled": true,
+   "fallback": {
+    "cloud_cooling_down": false,
+    "enabled": true
+   },
+   "limits": {
+    "per_day": 300,
+    "per_hour": 60
+   },
+   "max_audio_seconds": 30,
+   "max_upload_bytes": 8388608,
+   "model": "whisper-large-v3-turbo",
+   "remaining": {
+    "day": 300,
+    "hour": 60
+   },
+   "setup_problem": "not_configured"
+  },
+  "status": 200
+ },
+ "http GET /api/weather {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "attribution": {
+    "license": "CC BY 4.0",
+    "text": "Weather data by Open-Meteo.com",
+    "url": "https://open-meteo.com/"
+   },
+   "configured": false,
+   "data": null,
+   "error": null,
+   "label": "",
+   "last_attempt_ms": null,
+   "stale": false,
+   "status": "unconfigured",
+   "unit": "C",
+   "updated_ms": "<volatile>"
+  },
+  "status": 200
+ },
+ "http GET /app.js {} e3b0c44298fc": {
+  "body_sha256": "f677d6b770cd4f5e28fad6423f762295f2f04eb84b23df1ea9b37af3d07b6a36",
+  "headers": {
+   "cache-control": "no-cache",
+   "content-length": "10",
+   "content-type": "application/javascript; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 200
+ },
+ "http GET /escape.txt {} e3b0c44298fc": {
+  "body_sha256": "493fda53120050f85836032324409be6c6484f90a0755ae0c6a673ba7626818b",
+  "headers": {
+   "cache-control": "no-store",
+   "content-length": "10",
+   "content-type": "text/plain; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 404
+ },
+ "http GET /escapedir/outside.txt {} e3b0c44298fc": {
+  "body_sha256": "493fda53120050f85836032324409be6c6484f90a0755ae0c6a673ba7626818b",
+  "headers": {
+   "cache-control": "no-store",
+   "content-length": "10",
+   "content-type": "text/plain; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 404
+ },
+ "http GET /icons/ {} e3b0c44298fc": {
+  "body_sha256": "493fda53120050f85836032324409be6c6484f90a0755ae0c6a673ba7626818b",
+  "headers": {
+   "cache-control": "no-store",
+   "content-length": "10",
+   "content-type": "text/plain; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 404
+ },
+ "http GET /index.html {} e3b0c44298fc": {
+  "body_sha256": "89592fa80cae42e148ffc4c6c6262fda59a8de005038ab25008127d7f611d823",
+  "headers": {
+   "cache-control": "no-cache",
+   "content-length": "31",
+   "content-security-policy": "default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+   "content-type": "text/html; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff",
+   "x-frame-options": "DENY"
+  },
+  "status": 200
+ },
+ "http GET /m/ {} e3b0c44298fc": {
+  "body_sha256": "493fda53120050f85836032324409be6c6484f90a0755ae0c6a673ba7626818b",
+  "headers": {
+   "cache-control": "no-store",
+   "content-length": "10",
+   "content-type": "text/plain; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 404
+ },
+ "http GET /m/.secret.js {} e3b0c44298fc": {
+  "body_sha256": "493fda53120050f85836032324409be6c6484f90a0755ae0c6a673ba7626818b",
+  "headers": {
+   "cache-control": "no-store",
+   "content-length": "10",
+   "content-type": "text/plain; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 404
+ },
+ "http GET /m/app.js {} e3b0c44298fc": {
+  "body_sha256": "2bf28849cade87113ec4170ef2bf9ffb1179fc9a276afa675c9de2424349560b",
+  "headers": {
+   "cache-control": "no-cache",
+   "content-length": "19",
+   "content-type": "application/javascript; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 200
+ },
+ "http GET /maps/x.png {} e3b0c44298fc": {
+  "body_sha256": "493fda53120050f85836032324409be6c6484f90a0755ae0c6a673ba7626818b",
+  "headers": {
+   "cache-control": "no-store",
+   "content-length": "10",
+   "content-type": "text/plain; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 404
+ },
+ "http GET /media/clip.mp4 {\"Range\": \"bytes=10-19\"} e3b0c44298fc": {
+  "body_sha256": "c3a3674842d925c4a400b5b98383f894363e98bf1d328bba0dcf44852ae9a0e2",
+  "headers": {
+   "accept-ranges": "bytes",
+   "content-length": "10",
+   "content-range": "bytes 10-19/10240",
+   "content-type": "video/mp4",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 206
+ },
+ "http GET /media/clip.mp4 {\"Range\": \"bytes=99999-\"} e3b0c44298fc": {
+  "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "headers": {
+   "accept-ranges": "bytes",
+   "content-length": "0",
+   "content-range": "bytes */10240",
+   "content-type": "text/plain",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 416
+ },
+ "http GET /media/clip.mp4 {} e3b0c44298fc": {
+  "body_sha256": "e96760a87768717bcebcfd25ddc7d46b4dbc95a4b0014def080c08539f7d90d0",
+  "headers": {
+   "accept-ranges": "bytes",
+   "content-length": "10240",
+   "content-type": "video/mp4",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 200
+ },
+ "http GET /media/missing.mp4 {} e3b0c44298fc": {
+  "body_sha256": "493fda53120050f85836032324409be6c6484f90a0755ae0c6a673ba7626818b",
+  "headers": {
+   "cache-control": "no-store",
+   "content-length": "10",
+   "content-type": "text/plain; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 404
+ },
+ "http GET /notes.bin {} e3b0c44298fc": {
+  "body_sha256": "493fda53120050f85836032324409be6c6484f90a0755ae0c6a673ba7626818b",
+  "headers": {
+   "cache-control": "no-store",
+   "content-length": "10",
+   "content-type": "text/plain; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 404
+ },
+ "http HEAD / {} e3b0c44298fc": {
+  "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "headers": {
+   "cache-control": "no-cache",
+   "content-length": "36",
+   "content-security-policy": "default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+   "content-type": "text/html; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "vary": "User-Agent, Cookie",
+   "x-content-type-options": "nosniff",
+   "x-frame-options": "DENY"
+  },
+  "status": 200
+ },
+ "http HEAD /api/time {} e3b0c44298fc": {
+  "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-length": "147",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 200
+ },
+ "http HEAD /media/clip.mp4 {} e3b0c44298fc": {
+  "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "headers": {
+   "accept-ranges": "bytes",
+   "content-length": "10240",
+   "content-type": "video/mp4",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 200
+ },
+ "http OPTIONS / {} e3b0c44298fc": {
+  "body_sha256": "669bb658059b0d13e583d42c2de2a8b0988a64c2febec0f8b47a963b9780d5a6",
+  "headers": {
+   "allow": "GET, HEAD",
+   "connection": "close",
+   "content-length": "19",
+   "content-type": "text/plain; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 405
+ },
+ "http POST / {} e3b0c44298fc": {
+  "body_sha256": "669bb658059b0d13e583d42c2de2a8b0988a64c2febec0f8b47a963b9780d5a6",
+  "headers": {
+   "allow": "GET, HEAD",
+   "connection": "close",
+   "content-length": "19",
+   "content-type": "text/plain; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 405
+ },
+ "http POST /api/admin/login {\"Content-Type\": \"application/json\"} 44136fa355b3": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": "not found",
+   "ok": false
+  },
+  "status": 404
+ },
+ "http POST /api/assistant {\"Content-Type\": \"application/json\", \"Origin\": \"http://evil.example\"} 573c68a405e7": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": {
+    "code": "forbidden_origin",
+    "message": "Cross-origin requests are not allowed."
+   },
+   "ok": false
+  },
+  "status": 403
+ },
+ "http POST /api/assistant {\"Content-Type\": \"application/json\"} 38a088e1899e": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": {
+    "code": "empty_question",
+    "message": "Type a question first."
+   },
+   "ok": false
+  },
+  "status": 400
+ },
+ "http POST /api/assistant {\"Content-Type\": \"application/json\"} 6c43edc9a266": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": {
+    "code": "bad_request",
+    "message": "Request must be an object with a question (and optionally conversation and speak)."
+   },
+   "ok": false
+  },
+  "status": 400
+ },
+ "http POST /api/assistant {\"Content-Type\": \"application/json\"} 7ccfa1fbf394": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": {
+    "code": "bad_request",
+    "message": "Request must be valid JSON."
+   },
+   "ok": false
+  },
+  "status": 400
+ },
+ "http POST /api/assistant {\"Content-Type\": \"application/json\"} bca09f4a757d": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": {
+    "code": "too_large",
+    "message": "Request is too large."
+   },
+   "ok": false
+  },
+  "status": 413
+ },
+ "http POST /api/assistant {\"Content-Type\": \"application/json\"} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": {
+    "code": "bad_request",
+    "message": "Empty request."
+   },
+   "ok": false
+  },
+  "status": 400
+ },
+ "http POST /api/assistant {\"Content-Type\": \"text/plain\"} 8f434346648f": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": {
+    "code": "unsupported_media_type",
+    "message": "Send application/json."
+   },
+   "ok": false
+  },
+  "status": 415
+ },
+ "http POST /api/assistant {} 44136fa355b3": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": {
+    "code": "unsupported_media_type",
+    "message": "Send application/json."
+   },
+   "ok": false
+  },
+  "status": 415
+ },
+ "http POST /api/assistant/confirm {\"Content-Type\": \"application/json\"} 3bce00692931": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": {
+    "code": "confirm_failed",
+    "message": "Esa confirmación ya expiró. Pídelo otra vez. / That confirmation expired. Please ask again."
+   },
+   "ok": false
+  },
+  "status": 410
+ },
+ "http POST /api/assistant/confirm {\"Content-Type\": \"application/json\"} a7cf609ce8a0": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": {
+    "code": "bad_request",
+    "message": "Invalid token."
+   },
+   "ok": false
+  },
+  "status": 400
+ },
+ "http POST /api/assistant/confirm {\"Content-Type\": \"text/plain\"} 2d711642b726": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": {
+    "code": "unsupported_media_type",
+    "message": "Send application/json."
+   },
+   "ok": false
+  },
+  "status": 415
+ },
+ "http POST /api/cameras/control {\"Content-Type\": \"application/json\"} cfda20b409cc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": {
+    "code": "bad_request",
+    "message": "Send \"move\" or \"mode\"."
+   },
+   "ok": false
+  },
+  "status": 400
+ },
+ "http POST /api/cameras/snapshot {\"Content-Type\": \"application/json\"} a977ec931696": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": {
+    "code": "camera_error",
+    "message": "unknown camera"
+   },
+   "ok": false
+  },
+  "status": 404
+ },
+ "http POST /api/home/action {\"Content-Type\": \"application/json\"} 080a9ed42855": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": {
+    "code": "bad_request",
+    "message": "Send {\"id\": \"...\"}."
+   },
+   "ok": false
+  },
+  "status": 400
+ },
+ "http POST /api/home/action {\"Content-Type\": \"application/json\"} 44136fa355b3": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": {
+    "code": "bad_request",
+    "message": "Send {\"id\": \"...\"}."
+   },
+   "ok": false
+  },
+  "status": 400
+ },
+ "http POST /api/home/action {\"Content-Type\": \"text/plain\"} 44136fa355b3": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": {
+    "code": "unsupported_media_type",
+    "message": "Send application/json."
+   },
+   "ok": false
+  },
+  "status": 415
+ },
+ "http POST /api/transcribe {\"Content-Type\": \"application/octet-stream\"} e23b51a40d21": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": {
+    "code": "not_configured",
+    "message": "Voice input isn't set up yet. The Groq API key must be added on the server (see README)."
+   },
+   "ok": false
+  },
+  "status": 503
+ },
+ "http POST /api/transcribe {\"Content-Type\": \"text/plain\"} ba7816bf8f01": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": {
+    "code": "unsupported_media_type",
+    "message": "Send an audio recording."
+   },
+   "ok": false
+  },
+  "status": 415
+ },
+ "http POST /api/transcribe {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": {
+    "code": "unsupported_media_type",
+    "message": "Send an audio recording."
+   },
+   "ok": false
+  },
+  "status": 415
+ },
+ "http POST /api/unknown {\"Content-Type\": \"application/json\"} 44136fa355b3": {
+  "body_sha256": "669bb658059b0d13e583d42c2de2a8b0988a64c2febec0f8b47a963b9780d5a6",
+  "headers": {
+   "allow": "GET, HEAD",
+   "connection": "close",
+   "content-length": "19",
+   "content-type": "text/plain; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 405
+ },
+ "http PUT / {} e3b0c44298fc": {
+  "body_sha256": "669bb658059b0d13e583d42c2de2a8b0988a64c2febec0f8b47a963b9780d5a6",
+  "headers": {
+   "allow": "GET, HEAD",
+   "connection": "close",
+   "content-length": "19",
+   "content-type": "text/plain; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 405
+ },
+ "https GET / {} e3b0c44298fc": {
+  "body_sha256": "063f26d1f29721aec0c977e87843553644725169f8acc4064c3695956cf14bad",
+  "headers": {
+   "cache-control": "no-cache",
+   "content-length": "36",
+   "content-security-policy": "default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+   "content-type": "text/html; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "vary": "User-Agent, Cookie",
+   "x-content-type-options": "nosniff",
+   "x-frame-options": "DENY"
+  },
+  "status": 200
+ },
+ "https GET /../server.key {} e3b0c44298fc": {
+  "body_sha256": "493fda53120050f85836032324409be6c6484f90a0755ae0c6a673ba7626818b",
+  "headers": {
+   "cache-control": "no-store",
+   "content-length": "10",
+   "content-type": "text/plain; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 404
+ },
+ "https GET /admin {} e3b0c44298fc": {
+  "body_sha256": "cfc103f07fe4fe72dc390e2245b170b86c6949d986d050b5d950d3c934373522",
+  "headers": {
+   "cache-control": "no-cache",
+   "content-length": "35",
+   "content-security-policy": "default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+   "content-type": "text/html; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff",
+   "x-frame-options": "DENY"
+  },
+  "status": 200
+ },
+ "https GET /admin.js {} e3b0c44298fc": {
+  "body_sha256": "62e7cec8ef039860b701ac964db4d1b4d3e0d180716f4407afb3fdc9d673bd9b",
+  "headers": {
+   "cache-control": "no-cache",
+   "content-length": "14",
+   "content-type": "application/javascript; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "status": 200
+ },
+ "https GET /admin/ {} e3b0c44298fc": {
+  "body_sha256": "cfc103f07fe4fe72dc390e2245b170b86c6949d986d050b5d950d3c934373522",
+  "headers": {
+   "cache-control": "no-cache",
+   "content-length": "35",
+   "content-security-policy": "default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+   "content-type": "text/html; charset=utf-8",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff",
+   "x-frame-options": "DENY"
+  },
+  "status": 200
+ },
+ "https GET /api/admin/nope {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": "Please sign in.",
+   "ok": false
+  },
+  "status": 401
+ },
+ "https GET /api/admin/overview {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": "Please sign in.",
+   "ok": false
+  },
+  "status": 401
+ },
+ "https GET /api/admin/session {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "enabled": true,
+   "logged_in": false,
+   "ok": true,
+   "password_set": false,
+   "version": "<volatile>"
+  },
+  "status": 200
+ },
+ "https GET /api/time {} e3b0c44298fc": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "abbreviation": "UTC",
+   "local_iso": "<volatile>",
+   "now_ms": "<volatile>",
+   "timezone": "UTC",
+   "utc_offset": "+00:00",
+   "utc_offset_minutes": 0
+  },
+  "status": 200
+ },
+ "https POST /api/admin/login {\"Content-Type\": \"application/json\", \"X-Admin\": \"1\"} 44136fa355b3": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": "No admin password is set. On the server run: scripts/set-admin-password.sh",
+   "ok": false
+  },
+  "status": 503
+ },
+ "https POST /api/admin/login {\"Content-Type\": \"application/json\"} 44136fa355b3": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": "Cross-origin or scripted requests are not allowed.",
+   "ok": false
+  },
+  "status": 403
+ },
+ "https POST /api/admin/logout {\"Content-Type\": \"application/json\", \"X-Admin\": \"1\"} 44136fa355b3": {
+  "headers": {
+   "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+   "connection": "close",
+   "content-type": "application/json; charset=utf-8",
+   "expires": "0",
+   "pragma": "no-cache",
+   "referrer-policy": "no-referrer",
+   "x-content-type-options": "nosniff"
+  },
+  "json": {
+   "error": "Please sign in.",
+   "ok": false
+  },
+  "status": 401
+ }
+}

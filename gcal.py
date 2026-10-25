@@ -613,11 +613,11 @@ def exchange_code(client, code, verifier, redirect_uri, timeout=15):
 
 
 def _cli_paths():
-    import server  # local import: only for the command line
-    cfg = server.load_config(os.path.join(server.BASE_DIR, "config.json"))
+    import config  # local import: only for the command line
+    cfg = config.load_config(os.path.join(config.BASE_DIR, "config.json"))
     c = cfg["calendar"]
-    return (cfg, os.path.join(server.BASE_DIR, c["env_file"]),
-            os.path.join(server.BASE_DIR, c["token_file"]))
+    return (cfg, os.path.join(config.BASE_DIR, c["env_file"]),
+            os.path.join(config.BASE_DIR, c["token_file"]))
 
 
 def _prompt_client(env_path):

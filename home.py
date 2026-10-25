@@ -52,10 +52,20 @@ ON_STATES = ("on", "armed_away", "armed_home", "armed_night", "armed_vacation", 
              "arming", "triggered", "open", "playing")
 MAX_BUTTONS = 24
 STATUS_TTL = 5
+MAX_ALIASES = 8
 
 
 def _num(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def validate_aliases(owner, aliases):
+    """Optional "aliases": other names the assistant accepts for a button or camera ("ventilador")."""
+    if not isinstance(aliases, list) or len(aliases) > MAX_ALIASES:
+        raise ValueError("%s: aliases must be a list of at most %d names" % (owner, MAX_ALIASES))
+    for a in aliases:
+        if not isinstance(a, str) or not 2 <= len(a.strip()) <= 30:
+            raise ValueError("%s: each alias must be 2-30 characters" % owner)
 
 
 def validate_button(b):
@@ -73,6 +83,8 @@ def validate_button(b):
         raise ValueError("home button %r: confirm must be true or false" % bid)
     if "icon" in b and not (isinstance(b["icon"], str) and ICON_RE.match(b["icon"])):
         raise ValueError("home button %r: icon must be a short name like 'light'" % bid)
+    if "aliases" in b:
+        validate_aliases("home button %r" % bid, b["aliases"])
     if b["kind"] == "ha":
         pair = "on_service" in b or "off_service" in b
         if pair:
@@ -386,10 +398,63 @@ class Home:
             self._last_action[button_id] = now
             self._recent.append(now)
 
+    def button(self, button_id):
+        return next((b for b in self.cfg["buttons"] if b["id"] == button_id), None)
+
+    def button_state(self, button, states=None):
+        """'on', 'off' or None (unknown / no state) for one button. Media switch: 'plex'/'jellyfin'/..."""
+        if button["kind"] == "media_switch":
+            return self.media_status()["current"]
+        ent = button.get("state_entity")
+        if not ent:
+            return None
+        states = self.ha_states() if states is None else states
+        st = (states or {}).get(ent)
+        if st is None or st in ("unavailable", "unknown", "missing"):
+            return None
+        return "on" if st in ON_STATES else "off"
+
+    def set_state(self, button_id, want):
+        """Bring a button to `want` ('on', 'off' or 'press'; 'plex'/'jellyfin' for the media switch)
+        without blindly toggling: a light that is already off is left alone. Used by the assistant;
+        confirmation is the caller's job. Returns {"ok", "changed", "state"}; raises ActionError."""
+        if not self.cfg["enabled"]:
+            raise ActionError("home controls are turned off", 404)
+        button = self.button(button_id)
+        if button is None:
+            raise ActionError("unknown button", 404)
+        if button["kind"] == "media_switch":
+            current = self.media_status(fresh=True)["current"]
+            target = want if want in MEDIA else None
+            if target is not None and current == target:
+                return {"ok": True, "changed": False, "state": current}
+            self._rate_check(button_id)
+            target = self.start_media_switch(target)
+            log.info("home: assistant %s -> switching to %s", button_id, target)
+            return {"ok": True, "changed": True, "pending": True, "state": target}
+        if want not in ("on", "off", "press"):
+            raise ActionError("unknown action", 400)
+        if want != "press":
+            if not button.get("state_entity"):
+                raise ActionError("this button can only be pressed", 400)
+            current = self.button_state(button, self.ha_states(fresh=True))
+            if current is None:
+                raise ActionError("Home Assistant doesn't know its state right now", 503)
+            if current == want:
+                return {"ok": True, "changed": False, "state": current}
+        self._rate_check(button_id)
+        if want == "press" or "service" in button:
+            service = self.ha_call(button)
+        else:
+            service = button["on_service"] if want == "on" else button["off_service"]
+            self.ha_service(service, button["entity_id"])
+        log.info("home: assistant %s -> %s %s", button_id, service, button["entity_id"])
+        return {"ok": True, "changed": True, "state": want if want != "press" else None}
+
     def action(self, button_id):
         if not self.cfg["enabled"]:
             raise ActionError("home controls are turned off", 404)
-        button = next((b for b in self.cfg["buttons"] if b["id"] == button_id), None)
+        button = self.button(button_id)
         if button is None:
             raise ActionError("unknown button", 404)
         self._rate_check(button_id)

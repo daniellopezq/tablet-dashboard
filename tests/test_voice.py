@@ -27,6 +27,8 @@ from test_server import DashboardTestCase, start_thread_server  # noqa: E402
 FAKE_KEY = "gsk_FAKEKEY1234567890"
 SPOKEN = "How tall is Mount Whitney?"
 FFMPEG = vm.resolve_ffmpeg("ffmpeg")
+# Fixtures only: Ubuntu's apt ffmpeg has no AMR-NB encoder; the snap build, if installed, does.
+FIXTURE_FFMPEG = "/snap/bin/ffmpeg" if os.access("/snap/bin/ffmpeg", os.X_OK) else FFMPEG
 
 
 class MockGroq(BaseHTTPRequestHandler):
@@ -76,7 +78,7 @@ class MockGroq(BaseHTTPRequestHandler):
 
 
 def make_tone(path, seconds, extra):
-    cmd = [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
+    cmd = [FIXTURE_FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
            "-i", "sine=frequency=440:duration=%s" % seconds] + extra + [path]
     subprocess.run(cmd, check=True, stdin=subprocess.DEVNULL, timeout=60)
     with open(path, "rb") as f:
@@ -84,7 +86,7 @@ def make_tone(path, seconds, extra):
 
 
 def has_encoder(name):
-    out = subprocess.run([FFMPEG, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=30).stdout
+    out = subprocess.run([FIXTURE_FFMPEG, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=30).stdout
     return any(line.split()[1:2] == [name] for line in out.splitlines())
 
 

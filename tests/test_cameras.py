@@ -232,6 +232,9 @@ class CameraTests(CamerasTestCase):
 FAKE_FFMPEG = """#!%s
 # Stands in for ffmpeg: "ok" writes a small JPEG every 50 ms until killed; "fail" exits like a dead camera.
 import os, sys, time
+if "-version" in sys.argv:
+    print("ffmpeg version 6.1.1-fake")
+    sys.exit(0)
 mode = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "mode")).read().strip()
 if mode == "fail":
     sys.stderr.write("rtsp://cam: Connection refused\\n")
@@ -306,6 +309,11 @@ class RtspTests(unittest.TestCase):
         self.assertEqual(cmd[0], self.cfg["ffmpeg_path"])
         self.assertIn("rtsp://192.168.1.20:554/live/ch00_1", cmd)
         self.assertEqual(cmd[-3:], ["-f", "image2pipe", "-"])
+        self.assertIn("-timeout", cmd)  # ffmpeg 5+ spelling (the fake says 6.1)
+
+    def test_rtsp_timeout_flag_by_version(self):
+        self.assertEqual(cameras.rtsp_timeout_flag(self.cfg["ffmpeg_path"]), "-timeout")
+        self.assertEqual(cameras.rtsp_timeout_flag("/nonexistent/ffmpeg"), "-stimeout")
 
     def test_snapshot_without_home_assistant(self):
         snap = self.cams.snapshot()

@@ -1,10 +1,28 @@
 # Tablet Dashboard
 
+[![Tests](https://github.com/daniellopezq/tablet-dashboard/actions/workflows/tests.yml/badge.svg)](https://github.com/daniellopezq/tablet-dashboard/actions/workflows/tests.yml)
+
 **A self-hosted home dashboard for an Android 4.4 tablet (800 × 400, Chrome 50).** It combines clock, weather, maps, read-only calendar, an AI/voice assistant, service uptime, Home Assistant controls, and camera monitoring—including local RTSP live view.
 
 The tablet runs plain ES5 JavaScript; a lightweight Python server handles APIs, caching, media conversion and private keys. Cloud AI and transcription can fall back to small local models when the cloud fails to respond. The goal is to make otherwise obsolete hardware useful without replacing it or depending on a modern browser.
 
-**Current release:** [0.21.2](VERSION.md) (October 2026). The repository has **269 unittest tests**, run on every push by GitHub Actions; upstream services and camera processes are mocked in tests, and compatibility still needs real-device checks.
+**Current release:** [0.25.1](VERSION.md) (October 2026). The repository has **327 unittest tests**, run on every push by GitHub Actions; upstream services and camera processes are mocked in tests, and compatibility still needs real-device checks.
+
+## Screenshots
+
+The old tablet (800 × 400, Chrome 50) gets the classic ES5 page with big touch targets:
+
+| Weather | Home | Cameras |
+|---|---|---|
+| ![Weather tab on the tablet](docs/screenshots/tablet-weather.png) | ![Home tab on the tablet](docs/screenshots/tablet-home.png) | ![Cameras tab on the tablet](docs/screenshots/tablet-cameras.png) |
+
+Phones and PCs get the modern view at the same address:
+
+| PC (dark theme) | Phone |
+|---|---|
+| <img src="docs/screenshots/modern-pc.png" alt="Modern view overview on a PC" width="560"> | <img src="docs/screenshots/modern-phone.png" alt="Modern view on a phone" width="220"> |
+
+*Screenshots use demo data: the location, events, devices, camera pictures and map layers are made up.*
 
 ## What it does
 
@@ -13,6 +31,9 @@ The tablet runs plain ES5 JavaScript; a lightweight Python server handles APIs, 
 - **Weather maps:** precipitation, cloud, wind and temperature layers over a darkened street map, rotating in a slideshow.
 - **Calendar:** a read-only agenda of upcoming Google Calendar events.
 - **Ask:** type or speak a question and get a short AI answer. Voice uses one tap and stops on its own when you stop talking.
+- **Ask the house:** "turn off the fan", "¿qué está prendido?" or "what do you see outside?" in Spanish or English. Simple
+  commands run without the AI; alarm-type actions need an on-screen Yes enforced by the server; answers can be spoken
+  (local Piper voices, or Google Cloud TTS with Piper as the fallback).
 - **Built for always-on use:** fullscreen mode, a diagnostics panel, usage limits so free API tiers aren't exceeded, and
   old data stays on screen when a service is down.
 - **Local fallback:** when cloud AI or speech services provide no response before the configured deadline, llama.cpp and whisper.cpp can answer locally; the UI labels fallback results. An HTTP error response does **not** trigger fallback.
@@ -91,13 +112,21 @@ Optional features need extra setup and stay disabled or show a "not set up" mess
 
 | Path | Purpose |
 |---|---|
-| `server.py` | HTTP(S) server: static files, `/api/*`, `/media/*`, background weather fetcher |
+| `server.py` | Entry point: builds the services (`App`), runs the http and https listeners, holds `VERSION` |
+| `config.py` | Config defaults, `config.json` loading and validation (each feature module validates its own section) |
+| `httpcore.py` | HTTP helpers: content types, CSP, safe path resolution, Range requests, `send_json`/`send_file` |
+| `routes/` | URL routing: the route table in `routes/__init__.py` (with a LAN-only flag per route), handlers in `public.py`, `ai.py`, `devices.py`, `files.py`, `admin_api.py` |
+| `weather.py` | Open-Meteo weather: background fetcher and cache |
 | `assistant.py` | AI assistant: key loading, usage limits, Vercel AI Gateway call, local fallback for Ask |
 | `voice.py` | Voice input: upload checks, ffmpeg conversion, Groq Whisper transcription, local fallback for Voice |
+| `homeai.py` | "Ask the house": matcher for simple home commands, the house block for the model, actions with server-side confirmation, camera pictures |
+| `tts.py` | Spoken answers: engine choice (Google or Piper), language pick (es/en), in-memory WAV cache, saved phrase bank |
+| `googletts.py` | Optional Google Cloud Text-to-Speech: service-account sign-in, Chirp 3 HD voice, monthly character limit |
+| `pgstore.py` | Optional history in a local PostgreSQL through `psql` (peer login): weather readings today |
 | `fallback.py` | Local-fallback mechanism shared by Ask and Voice: header deadline, cooldown gate, local lock, plain-text cleaner |
 | `maps.py` | Weather maps: OpenWeatherMap and OpenStreetMap tiles, rate limiting, Pillow compositing |
 | `gcal.py` | Google Calendar: background fetcher, plus the `auth`, `status`, `test` and `revoke` commands |
-| `admin.py` | Admin page backend: password sign-in, API keys, Calendar sign-in, settings, AI models, offline test, logs, maintenance |
+| `admin/` | Admin page backend: password sign-in, API keys, Calendar sign-in, settings, AI models, offline test, logs, maintenance (one mixin per page; CLI `python3 -m admin set-password`) |
 | `health.py` | Health checks and the optional Uptime Kuma client (status page, `/metrics`, push heartbeat) |
 | `localai.py` | Local model inventory, choice (`local_ai` in config) and start/stop for the admin page |
 | `netsim.py` | Offline test switch (simulated internet outage inside the dashboard only) |
@@ -111,10 +140,10 @@ Optional features need extra setup and stay disabled or show a "not set up" mess
 | `web-modern/` | Modern view for phones and PCs (ES modules, no build step), served under `/m/` |
 | `media/` | Optional; the only directory served under `/media/` (mp4, m4v, webm) |
 | `data/`, `logs/`, `run/` | Runtime state, log and PID file (created automatically, gitignored) |
-| `scripts/` | `start.sh`, `stop.sh`, `make-cert.sh`, `set-assistant-key.sh`, `set-admin-password.sh`, `offline-test.sh`, `local-ai-start.sh`, `local-ai-stop.sh` |
+| `scripts/` | `start.sh`, `stop.sh`, `make-cert.sh`, `set-assistant-key.sh`, `set-admin-password.sh`, `offline-test.sh`, `local-ai-start.sh`, `local-ai-stop.sh`, `install-piper.sh` (Piper and two voices into `../local-ai`, checksummed, no sudo) |
 | `tools/eval_local_llm.py` | Quality and speed check for a local LLM |
 | `docs/` | System overview, admin panel reference, local fallback architecture, benchmarks and plan |
-| `tests/` | Unit tests with mock upstream servers: `python3 -m unittest discover -s tests` |
+| `tests/` | Unit tests with mock upstream servers: `python3 -m unittest discover -s tests`. `test_routes_table.py` compares every route against a recorded golden file |
 
 ## Configuration (`config.json`)
 
@@ -135,6 +164,8 @@ Optional features need extra setup and stay disabled or show a "not set up" mess
 | `assistant.*`, `voice.*`, `maps.*`, `calendar.*` | | See the sections below |
 | `local_ai.*`, `health.*`, `kuma.*`, `admin.*` | | See "Local fallback" and "Admin page"; full tables in [docs/ADMIN-PANEL.md](docs/ADMIN-PANEL.md) |
 | `home.*`, `cameras.*` | | Optional Home Assistant, local device control and camera definitions; see the Home and Cameras sections |
+| `tts.*` | | Spoken Ask answers (Piper or Google); see "Ask the house" |
+| `database.enabled` | `false` | Optional weather history in a local PostgreSQL; see "Weather history" |
 
 The weather location is never guessed from the timezone or IP address. Keys starting with `_` are ignored, so you can use
 them for comments. Restart after editing: `scripts/stop.sh && scripts/start.sh`.
@@ -180,7 +211,9 @@ variables with the same names take priority over the file.
 | `POST /api/cameras/control` | One pan/tilt step (`{"id": "...", "move": "left\|right\|up\|down"}`) or a day/night change (`{"id": "...", "mode": "day\|night\|auto"}`) over ONVIF. Same-origin, LAN only. |
 | `POST /api/cameras/snapshot` | Ask one HA camera for a new picture (`{"id": "..."}`); wakes battery cameras, so rate limited. Same-origin, LAN only. |
 | `/api/config` | Client settings (version, timezone, clock format, weather unit, https port) |
-| `POST /api/assistant`, `/api/assistant/status` | Ask one question; setup state and remaining quota |
+| `POST /api/assistant`, `/api/assistant/status` | Ask a question or give a home command; setup state, remaining quota and spoken-answer status |
+| `POST /api/assistant/confirm` | Carry out a home action the assistant held back for confirmation (one-time token, 60 s). Same-origin, LAN only. |
+| `/api/tts/<speech_id>.wav` | The spoken answer for one reply (saved phrase bank or Piper/Google). LAN only. |
 | `POST /api/transcribe`, `/api/voice/status` | Speech to text; setup state and remaining quota |
 | `/api/maps`, `/maps/<layer>.png`, `/maps/<layer>_small.png` | Map status and rendered images |
 | `/media/<file>` | Only from `media/`, with byte-range support |
@@ -217,7 +250,7 @@ the way the tablet does. Home buttons ask for confirmation exactly like the tabl
 
 Voice uses `MediaRecorder` and stops by itself after a pause, with the same thresholds as the tablet. Browsers only
 allow the microphone on secure pages, so use the https address (`https://<server>:<https_port>/`). On plain http,
-**Voice** opens the phone's recorder app and the page links to the https address. The theme follows the device's light
+**Voice** takes you to the https address, where one tap records (since 0.22.1). The theme follows the device's light
 or dark setting. The 12/24 h choice (tap the clock) is shared with the classic view on the same device.
 
 ## Client behaviour
@@ -242,8 +275,9 @@ or dark setting. The 12/24 h choice (tap the clock) is shared with the classic v
 
 ## AI assistant (Ask tab)
 
-Each question starts fresh: only a short system instruction and the question go to the model. There is no history, tool
-use or access to the dashboard's data. Answers are plain text in large type, paged instead of scrolled: when an answer
+With `assistant.home_control` off, each question starts fresh: only a short system instruction and the question go to
+the model, with no history or access to the house. With it on (the default since 0.22.0), see "Ask the house" below.
+There is no web search and no access to weather, calendar or the server. Answers are plain text in large type, paged instead of scrolled: when an answer
 doesn't fit, big Back and Next buttons appear beside it. The Voice button is a large target next to the question box.
 
 - **Provider:** [Vercel AI Gateway](https://vercel.com/docs/ai-gateway), OpenAI-compatible
@@ -278,6 +312,59 @@ doesn't fit, big Back and Next buttons appear beside it. The Voice button is a l
   elsewhere. Upstream error text is never shown to the browser or logged.
 - Logs contain the request line and status only, never question or answer content.
 - **Don't expose this server to the internet.** It's designed for a trusted LAN.
+
+## Ask the house (0.22.0)
+
+The Ask tab (typed or by voice) also controls the Home tiles, answers questions about the house and looks through the
+cameras, and the answer can be spoken. `homeai.py` does the house part; the model never gets more than the list below.
+
+- **Simple commands without the AI** (no Ask quota): "apaga el abanico", "prende la luz de la recámara principal",
+  "turn off the fan", "arma la alarma", "cambia a jellyfin", "apaga el abanico y el govee", and state questions such as
+  "¿qué está prendido?" or "is the alarm armed?". Names come from each button's `label`, `id` and optional
+  `aliases` (a list in `config.json`, e.g. `["ventilador", "fan"]`); accents and filler words are ignored.
+- **Everything else goes to the model** with a HOUSE block (button ids, names and current on/off states; camera ids and
+  names; no entity ids or addresses) and answers as JSON `{"say", "actions", "look"}`. Ids that aren't Home tiles are
+  dropped. Offline, the local Qwen model gets the same block (grammar-constrained JSON).
+- **Never toggles blindly:** "apaga" on a light that is already off does nothing and says so (`Home.set_state`).
+- **Offers are never carried out:** when the model's reply asks ("¿quieres que apague…?"), any actions it listed are held
+  for the same Yes/No as below instead of running (0.22.4).
+- **Confirmation is enforced on the server:** buttons with `"confirm": true` (alarm, media switch) are never pressed by
+  the assistant. The reply carries a one-time token; the page shows the same Yes/No dialog as the Home tab, and only
+  `POST /api/assistant/confirm` presses the button.
+- **Memory:** the page sends a random conversation id; the server keeps the last `assistant.memory_turns` (6) messages
+  for `assistant.memory_seconds` (120 s) idle, in memory only, so "and the fan too" or "¿y sigue ahí?" work. Clear starts a
+  new conversation.
+- **Cameras:** "¿qué ves en la calle?", "is anyone in the living room?". RTSP cameras give a live frame (HD feed when they have
+  one); Home Assistant cameras give their Home Assistant snapshot, refreshed first when older than
+  `assistant.look_max_age_seconds` (60 s). Cameras with `"ai_refresh_seconds": 60` (best for cameras on
+  mains power; leave battery cameras on demand) get a background "New snapshot" every minute (`cameras.ai_refresh_enabled`
+  turns it off; backs off up to 10 minutes on errors). The picture is shrunk to at most 1024 px and sent with the
+  question to the cloud model; it counts as one Ask question. **Images are never sent to the local model:** offline,
+  the answer says the internet is needed.
+- **Spoken answers (Piper):** `scripts/install-piper.sh` installs Piper and two voices (es_MX "claude" high quality,
+  en_US "lessac", ~60 MB each) into `../local-ai/`. The voice is picked from the answer's language. The reply has a `speech_id`; the page
+  fetches `/api/tts/<id>.wav` (about 0.7 s per sentence on a 2014 Core i3) and plays it through Web Audio, unlocked by the
+  Ask/Voice tap (Android Chrome only plays sound after a tap). A "Sound on/off" button next to Clear remembers the choice.
+  Config section `tts` (`enabled`, `binary`, `voices`, `length_scale_es` 0.85 and `length_scale_en` 1.0 for speaking
+  speed, `sentence_silence`, `max_chars`, `timeout_seconds`, `cache_items`, `phrase_bank`, `phrases_extra`); speeds
+  and the phrase bank switch are also on the admin page.
+- **Google voice (0.25.0):** with `tts.engine` set to `"google"`, answers are spoken by Google Cloud
+  Text-to-Speech (`googletts.py`, voice `es-US-Chirp3-HD-Achernar` / `en-US-Chirp3-HD-Achernar`), and Piper is the
+  fallback. Set-up: create a service account in a Google Cloud project that has the Text-to-Speech API and
+  billing enabled (the service account needs no role), add a JSON key, and save it as `data/google-tts-sa.json`
+  with mode 600. Characters are counted per month in `data/google-tts-usage.json`, and Google is not used past
+  `tts.google_monthly_chars` (500,000; the free tier is 1M). Other settings: `google_voice_es/en`,
+  `google_speaking_rate_es/en`, `google_timeout_seconds`, `google_key_file`. Needs `python3-cryptography`
+  (Ubuntu package).
+- **Saved phrase bank (0.24.0):** every fixed reply to a home command, for each Home button in Spanish and English
+  ("Abanico apagado.", "Abanico ya estaba apagado.", "¿Apagar Abanico? Confírmalo en la pantalla.", "Todo está
+  apagado.") plus `tts.phrases_extra`, is rendered once in the background into `data/tts-phrases/` and played from
+  there at once. A reply made of several saved sentences is joined from the saved clips. File names hash the engine,
+  voice, speed and text, so a speed change re-renders the clips and old ones are removed. AI answers are never written
+  to disk; they still go through Piper. Progress is in `/api/assistant/status` (`speech.phrases`).
+- **Privacy:** with `assistant.home_control` on, button names and on/off states go to the cloud model with questions
+  the matcher doesn't handle, and a camera picture goes only when someone asks about a camera. Turn it off on the
+  admin page (Settings, Ask) to get the plain assistant back.
 
 ## Voice input (Voice button on the Ask tab)
 
@@ -507,6 +594,13 @@ From the [Open-Meteo](https://open-meteo.com/) Forecast API. It needs no key, an
 only** (under 10,000 calls a day; this dashboard makes about 96). The data is
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), and the page shows the required "Weather data by Open-Meteo.com"
 credit.
+
+### Weather history (0.23.0)
+
+Optional: each fetch can also be saved to a local PostgreSQL (`weather_readings` in the `dashboard` database, see `pgstore.py`),
+about 96 rows a day. One-time setup, run by the owner: `sudo -u postgres createuser "$USER"` and
+`sudo -u postgres createdb -O "$USER" dashboard` (peer login: the Linux user running the dashboard, no password); then set `"database": {"enabled": true}` in `config.json`. Look at it with
+`psql -d dashboard -c "select fetched_at, temperature, precipitation, condition from weather_readings order by id desc limit 10"`.
 
 ## Network trust and planned security work
 

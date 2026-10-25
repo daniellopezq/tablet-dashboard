@@ -11,6 +11,170 @@ that period.
 
 ---
 
+Versions 0.21.3 to 0.25.1 were developed on the author's own server and published together.
+
+## 0.25.1 (2026-10-25): Camera live view works with ffmpeg 6
+
+**Fixed**
+- RTSP live view showed no picture ("Option not found") with ffmpeg 5 or newer, which removed the RTSP `-stimeout`
+  option. `cameras.py` now asks ffmpeg for its version once and uses `-timeout` from 5.0 on and `-stimeout` before
+  that, so either build works.
+
+**Tests**
+- The fake ffmpeg in `tests/test_cameras.py` answers `-version`, plus a test of the flag choice.
+
+## 0.25.0 (2026-10-25): Google voice for spoken answers; shorter home replies
+
+**Added**
+- `googletts.py`: optional Google Cloud Text-to-Speech, voice **es-US-Chirp3-HD-Achernar** (and
+  en-US-Chirp3-HD-Achernar for English), picked by ear against Piper and other Chirp 3 HD voices. It signs in with a
+  service account key (`data/google-tts-sa.json`, mode 600). The JWT is signed with python3-cryptography (Ubuntu
+  package), and the access token is kept in memory only. Each call takes about 0.5–0.8 s, against 1.3 s for Piper.
+- `tts.engine`: `"google"` speaks with Google first and falls back to Piper when Google fails, times out
+  (`google_timeout_seconds` 5), is past the monthly limit, or the offline test blocks Ask. `"piper"` (the default)
+  works as before.
+- Spending guard: characters sent are counted per calendar month (UTC) in `data/google-tts-usage.json`. Calls stop
+  at `tts.google_monthly_chars` (500,000, half of Google's 1M free Chirp 3 HD characters a month) and Piper takes
+  over. `/api/assistant/status` shows `speech.engine` and `speech.google.{chars_this_month, monthly_limit}`.
+- The phrase bank records in the active engine's voice. Bank builds never fall back to Piper, so a Piper clip can't
+  end up under a Google name. A build stops after 3 failures in a row and retries in 10 minutes.
+- Admin page (Settings, Spoken answers): engine, Google voices, Google speeds, monthly character limit.
+
+**Changed**
+- Home replies are shorter and easier to say: "Abanico apagado.", "Abanico prendido.", "Movie night presionado."
+  (was "Listo, apagué Abanico."). English: "Abanico is off.", "Movie night pressed." (the button label is used as is).
+
+**Privacy**
+- With the Google engine, the text of spoken answers (home replies and AI answers) is sent to Google. Saved phrases
+  are sent once, when they are recorded.
+
+**Tests**
+- New `tests/test_googletts.py` (fake Google, throwaway RSA key): token reuse and refresh, usage count and monthly
+  limit, errors, Google-first with Piper fallback, bank clips only from Google, Piper engine untouched.
+
+## 0.24.0 (2026-10-24): Saved phrase bank for spoken answers
+
+**Added**
+- Spoken replies to home commands play at once instead of after ~1 s of Piper. `homeai.House.speech_phrases()` lists
+  every fixed reply the house can give for the current Home buttons (on/off/press, already on/off, states, armed and
+  disarmed, confirmations, media switch, Home Assistant down, expired, offline look) in Spanish and English. `tts.py`
+  renders them, plus `tts.phrases_extra` ("Listo.", "Ok.", "Apagado.", "Prendido.", …), in a background thread into
+  `data/tts-phrases/` (mode 700, files 600), one clip at a time between live answers.
+- A reply made of several saved sentences is joined from the saved clips; the longest saved run is matched first, so a
+  confirmation line stays one clip.
+- File names are a hash of engine, voice, speed, sentence pause and text: changing a speed on the admin page wakes the
+  thread, which re-renders and removes clips no longer wanted. It checks again every 6 hours.
+- Config `tts.phrase_bank` (on; also on the admin page) and `tts.phrases_extra` (up to 200 phrases).
+  `/api/assistant/status` → `speech.phrases` shows `{ready, total}`.
+
+**Privacy**
+- Only these template phrases are written to disk. AI answers are never saved; if any sentence of an answer is not in
+  the bank, the whole answer is rendered live.
+
+**Tests**
+- Phrase bank tests in `tests/test_homeai.py`, plus a check that every reply the house produces is covered by
+  `speech_phrases()`.
+
+## 0.23.0 (2026-10-23): Weather history in PostgreSQL
+
+**Added**
+- `pgstore.py`: optional history in a local PostgreSQL (database `dashboard`, peer login over the Unix socket as the
+  Linux user running the dashboard, so no password). It talks to PostgreSQL through the `psql` client, so the dashboard
+  still needs no Python packages beyond the standard library and Pillow. Every value is a psql variable quoted by psql,
+  never SQL text. Tables are created on startup; if the database is down, readings are skipped and logged once, and it
+  retries every 5 minutes. Config section `database` (`enabled`, `name`, `psql_path`, `timeout_seconds`), off by
+  default.
+- Every weather fetch (every 15 minutes) is saved to `weather_readings`: temperature, humidity, condition, rain in the
+  last 15 minutes, wind and gusts, today's min/max, rain total and rain chance, plus the full reading as JSON.
+- Open-Meteo now also returns rain, wind and gusts (current) and rain total and rain chance (daily). Same single call.
+- Ask gets tomorrow's rain chance and a last-24-hours summary from its own records (low/high, approximate rain, when it
+  last rained), so "¿llovió anoche?" is answered from data.
+
+**Tests**
+- New `tests/test_pgstore.py` (fake psql; checks values are variables, nulls, backoff, summary, new weather fields).
+
+## 0.22.4 (2026-10-23): Offers are confirmed, not carried out
+
+**Fixed**
+- A model reply that asked "Would you like me to turn on the fan?" while also listing actions had those actions carried
+  out at once, before the person answered. The prompt now says to leave actions empty when suggesting or asking, and as
+  a safety net, a reply containing a question mark has its actions held for the on-screen Yes/No (the same one-time
+  token as the alarm) instead of being run.
+
+## 0.22.3 (2026-10-23): Camera looks the model asks for, more look phrases, weather in Ask
+
+**Fixed**
+- When the model answered a question with "look at camera X", the follow-up call with the picture was refused by the
+  10-second gap between questions. The follow-up now only counts toward the hourly and daily limits.
+
+**Improved**
+- More phrases go straight to a camera without the model ("¿puedes ver si…", "revisa", "checa", "can you check…",
+  "did I leave…").
+- The assistant gets the dashboard's own weather (current, today, tomorrow from the Open-Meteo cache, no extra calls),
+  so "¿está lloviendo?" is answered from real data.
+
+## 0.22.2 (2026-10-23): Better Spanish voice, faster speech
+
+**Improved**
+- Spoken answers in Spanish use Piper's high-quality Mexican voice "claude", 15% faster (`tts.length_scale_es` 0.85).
+  English keeps "lessac" at normal speed. New `sentence_silence` setting (0.2 s). Speeds and pause are on the admin
+  page (Settings, Spoken answers). `scripts/install-piper.sh` installs the voice.
+
+## 0.22.1 (2026-10-23): Voice on the modern view goes to https
+
+**Fixed**
+- On the modern view over plain http, Voice opened the phone's recorder app, because browsers only allow the
+  microphone on https. It now goes to the dashboard's https address (`#assistant`), where one tap records. The recorder
+  app is only used when no https address is configured.
+
+## 0.22.0 (2026-10-23): Ask the house: home commands, camera questions and spoken answers
+
+**Added**
+- **Home commands in Ask** (typed or by voice): `homeai.py` understands simple commands and state questions in Spanish
+  and English ("apaga el abanico", "turn on the bedroom light", "¿qué está prendido?") without the AI and without using
+  the Ask quota. Other requests go to the model with the list of Home tiles and their states, and come back as JSON
+  actions. Only Home tiles can be pressed, and `Home.set_state` checks the current state instead of toggling blindly.
+- **Server-side confirmation:** alarm, media switch and any `"confirm": true` tile are held back until the person taps
+  Yes (`POST /api/assistant/confirm`, one-time token, 60 s). Before, only the pages asked.
+- **Short-term memory:** the last 6 messages of a conversation for 2 minutes idle (in memory), so follow-ups work.
+- **Camera questions:** "what do you see outside?" sends one picture to the cloud model: a live RTSP frame, or the Home
+  Assistant snapshot (refreshed first when older than 60 s). Optional background snapshots for cameras with
+  `ai_refresh_seconds`. Offline, camera questions say the internet is needed.
+- **Spoken answers:** Piper (local, ~0.7 s per sentence) in a Mexican Spanish or US English voice, picked from the
+  answer. `GET /api/tts/<id>.wav`, played through Web Audio on the tablet and the modern view; "Sound on/off" button.
+  `scripts/install-piper.sh` installs it into `../local-ai/` with checksums.
+- `aliases` for Home buttons and cameras; admin settings for house control, memory, spoken answers and the background
+  camera refresh.
+
+**Changed**
+- `POST /api/assistant` also accepts `conversation` and `speak`; replies may carry `source: "house"|"offline"`,
+  `actions_done`, `confirm` and `speech_id`. `/api/assistant/status` reports `home_control` and `speech`.
+- With house control off the assistant behaves exactly as before.
+
+**Tests**
+- New `tests/test_homeai.py` (matcher, confirmation, JSON replies, memory, camera paths, background refresh, Piper with
+  a fake binary); route snapshot extended with the new routes.
+
+## 0.21.3 (2026-10-23): Server code split into modules
+
+**Changed** (internal only; no change to routes, responses, ports or the pages)
+- `server.py` went from 1,121 to about 250 lines. It now only builds the services and runs the listeners:
+  - `config.py`: config defaults, loading and validation;
+  - `weather.py`: the Open-Meteo fetcher;
+  - `httpcore.py`: content types, CSP, safe paths, Range requests and the `send_*` helpers;
+  - `routes/`: one route table (exact paths, ordered prefixes, a LAN-only flag per route) and small handler modules.
+- `admin.py` (1,329 lines) became the `admin/` package: `AdminService` plus one mixin per admin page and a `core.py`
+  for shared constants and password hashing. The CLI is now `python3 -m admin set-password`.
+- The command-line tools load the config through `config.py` instead of importing the whole server. FastAPI was
+  considered and rejected: it would add dependencies and replace tested security code for no gain at this load.
+
+**Tests**
+- New `tests/test_routes_table.py`: requests over http and https compared against a golden file recorded from the code
+  before the split, in an empty base directory so local keys don't affect it; and a check that every LAN-only route
+  refuses outside clients. 327 tests in total at 0.25.1, run by GitHub Actions on every push.
+
+---
+
 Versions 0.15.0 to 0.17.0 were developed on the author's own server and published together.
 
 Versions 0.18.0 to 0.21.2 were developed on the author's own server and published together.

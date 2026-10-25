@@ -581,7 +581,8 @@
     setClass(sub, 'warn', subWarn);
   }
 
-  // ---- assistant (standalone questions; nothing is kept between questions) ----
+  // ---- assistant: questions, home commands ("apaga el abanico"), camera questions, spoken answers ----
+  // The server keeps the last few turns of this conversation (id below) for ~2 minutes; Clear starts a new one.
   var AI_TIMEOUT_MS = 45000;
   var VOICE_TIMEOUT_MS = 60000;  // upload + server conversion + transcription
   var AI_IDLE_TEXT = 'Answers appear here.';
@@ -590,8 +591,99 @@
   var ai = {
     inFlight: false, token: 0, handle: null, blockedUntil: 0, hasAnswer: false,
     configured: null, enabled: true, maxChars: 1000, minInterval: 10, left: null,
-    page: 0, pages: 1, pageStep: 0
+    page: 0, pages: 1, pageStep: 0,
+    conv: '', speak: storageGet('dashboard.aiSpeak') !== '0', speechOk: false,
+    audio: null, playing: null, confirmToken: null
   };
+
+  function aiNewConversation() {
+    ai.conv = ('c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10)).slice(0, 24);
+  }
+  aiNewConversation();
+
+  // Spoken answers play through Web Audio: Android Chrome only lets a page make sound after a tap, so the
+  // context is created (and a silent sound played) inside the Ask/Voice tap, then reused for the answer.
+  function aiUnlockAudio() {
+    if (!ai.speak || !ai.speechOk) { return; }
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) { return; }
+    try {
+      if (!ai.audio) { ai.audio = new AC(); }
+      if (ai.audio.state === 'suspended' && ai.audio.resume) { ai.audio.resume(); }
+      var buf = ai.audio.createBuffer(1, 1, 22050);
+      var src = ai.audio.createBufferSource();
+      src.buffer = buf;
+      src.connect(ai.audio.destination);
+      if (src.start) { src.start(0); } else { src.noteOn(0); }
+    } catch (e) { ai.audio = null; }
+  }
+
+  function aiStopSpeech() {
+    if (ai.playing) {
+      try { if (ai.playing.stop) { ai.playing.stop(0); } else { ai.playing.noteOff(0); } } catch (e) { /* ended */ }
+      ai.playing = null;
+    }
+  }
+
+  function aiPlaySpeech(id) {
+    if (!ai.audio || !ai.speak) { return; }
+    var token = ai.token;
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/api/tts/' + encodeURIComponent(id) + '.wav', true);
+    xhr.responseType = 'arraybuffer';
+    xhr.timeout = 20000;
+    xhr.onload = function () {
+      if (xhr.status !== 200 || token !== ai.token || !ai.audio) { return; }
+      ai.audio.decodeAudioData(xhr.response, function (buffer) {
+        if (token !== ai.token) { return; }
+        aiStopSpeech();
+        var src = ai.audio.createBufferSource();
+        src.buffer = buffer;
+        src.connect(ai.audio.destination);
+        ai.playing = src;
+        if (src.start) { src.start(0); } else { src.noteOn(0); }
+      }, function () { /* undecodable: the text is on screen anyway */ });
+    };
+    xhr.send();
+  }
+
+  function aiToggleSpeak() {
+    ai.speak = !ai.speak;
+    storageSet('dashboard.aiSpeak', ai.speak ? '1' : '0');
+    if (ai.speak) { aiUnlockAudio(); } else { aiStopSpeech(); }
+    aiRender();
+  }
+
+  // A home action that needs a yes (alarm, media switch): the same overlay as the Home tiles.
+  function aiAskConfirm(c) {
+    ai.confirmToken = c.token;
+    state.hcConfirmId = null;
+    setText($('hc-confirm-title'), c.title + '?');
+    setText($('hc-confirm-body'), 'Asked by voice or text in Ask.');
+    setText($('hc-yes'), 'Yes');
+    setOverlay('hc-confirm', true);
+  }
+
+  function aiConfirmSend() {
+    var tokenSent = ai.confirmToken;
+    ai.confirmToken = null;
+    if (!tokenSent) { return; }
+    aiUnlockAudio();
+    var token = ++ai.token;
+    aiSetAnswer('…', 'muted');
+    aiRequest('POST', '/api/assistant/confirm', { token: tokenSent, conversation: ai.conv, speak: ai.speak && ai.speechOk },
+      15000, function (err, data) {
+        if (token !== ai.token) { return; }
+        if (!err && data && data.ok) {
+          aiSetAnswer(data.answer, '');
+          if (data.speech_id) { aiPlaySpeech(data.speech_id); }
+        } else {
+          aiSetAnswer(data && data.error ? data.error.message : 'Could not reach the server.', 'error');
+        }
+        pollHome(500);
+        aiRender();
+      });
+  }
 
   // Like getJSON but also sends JSON and reports the HTTP status even for error responses.
   function aiRequest(method, url, bodyObj, timeoutMs, cb) {
@@ -720,6 +812,10 @@
     setText($('ai-chars'), $('ai-input').value.length + '/' + ai.maxChars);
     var left = ai.left;
     setText($('ai-left'), left ? left.hour + ' left this hour · ' + left.day + ' today' : '');
+    var sp = $('ai-speak');
+    setClass(sp, 'is-hidden', !ai.speechOk);
+    setClass(sp, 'is-off', !ai.speak);
+    setText(sp, ai.speak ? 'Sound on' : 'Sound off');
     voiceRender();
   }
 
@@ -732,6 +828,7 @@
       ai.maxChars = data.max_question_chars || 1000;
       ai.minInterval = data.min_interval_seconds || 0;
       ai.left = data.remaining || null;
+      ai.speechOk = !!(data.speech && data.speech.available);
       if (data.blocked) {
         ai.blockedUntil = Date.now() + data.blocked_retry_after * 1000;
         if (!ai.inFlight) { aiSetStatus('Temporarily unavailable (credits or access).', 'warn'); }
@@ -753,7 +850,9 @@
     aiSetStatus('', '');
     aiSetAnswer('Thinking…', 'muted');
     aiRender();
-    ai.handle = aiRequest('POST', '/api/assistant', { question: q }, AI_TIMEOUT_MS, function (err, data, status) {
+    aiStopSpeech();
+    var payload = { question: q, conversation: ai.conv, speak: ai.speak && ai.speechOk };
+    ai.handle = aiRequest('POST', '/api/assistant', payload, AI_TIMEOUT_MS, function (err, data, status) {
       if (token !== ai.token) { return; }  // cleared while waiting
       ai.inFlight = false;
       ai.handle = null;
@@ -767,9 +866,15 @@
       } else if (data && data.ok === true && typeof data.answer === 'string') {
         aiSetAnswer(data.answer + (data.truncated ? '\n\n(The answer was cut off at the length limit.)' : ''), '');
         // Cloud gave no response, so a small model on the server answered: say so, it can be wrong.
-        if (data.source === 'local') { aiSetStatus('Local fallback (small model, may be wrong)', 'warn'); } else { aiSetStatus('', ''); }
+        if (data.source === 'local') { aiSetStatus('Local fallback (small model, may be wrong)', 'warn'); } else if (data.source === 'offline') {
+          aiSetStatus('No internet for the cameras', 'warn');
+        } else { aiSetStatus('', ''); }
         if (data.remaining) { ai.left = data.remaining; }
-        ai.blockedUntil = Date.now() + ai.minInterval * 1000;
+        // House commands are answered on the server without the AI, so they don't count against the wait.
+        if (data.source !== 'house') { ai.blockedUntil = Date.now() + ai.minInterval * 1000; }
+        if (data.actions_done && data.actions_done.length) { pollHome(500); }
+        if (data.confirm && data.confirm.token) { aiAskConfirm(data.confirm); }
+        if (data.speech_id) { aiPlaySpeech(data.speech_id); }
       } else {
         var e = data && data.error ? data.error : {};
         var kind = status === 429 ? 'warn' : 'bad';
@@ -861,6 +966,7 @@
   }
 
   function voiceClick() {
+    aiUnlockAudio();  // inside the tap, so the spoken answer may play later
     if (voice.state === 'recording') { voiceFinish('tap'); return; }
     if (voice.state !== 'idle' || ai.inFlight) { return; }
     if (voice.configured === false) {
@@ -1101,6 +1207,8 @@
 
   function aiClear() {
     voiceCancel();
+    aiStopSpeech();
+    aiNewConversation();
     if (ai.handle) { ai.handle.abort(); ai.handle = null; }
     ai.token++;
     ai.inFlight = false;
@@ -2119,7 +2227,8 @@
     $('btn-more').addEventListener('click', function () { setOverlay('more', true); }, false);
     $('btn-more-close').addEventListener('click', function () { setOverlay('more', false); }, false);
     $('btn-hours').addEventListener('click', overlayTap(toggleHours), false);
-    $('ai-ask').addEventListener('click', aiAsk, false);
+    $('ai-ask').addEventListener('click', function () { aiUnlockAudio(); aiAsk(); }, false);
+    $('ai-speak').addEventListener('click', aiToggleSpeak, false);
     $('ai-clear').addEventListener('click', aiClear, false);
     $('ai-voice').addEventListener('click', voiceClick, false);
     $('ai-voice-file').addEventListener('change', voiceFileChosen, false);
@@ -2144,11 +2253,13 @@
     $('hc-next').addEventListener('click', function () { state.hcPage++; renderHome(); }, false);
     $('hc-yes').addEventListener('click', overlayTap(function () {
       setOverlay('hc-confirm', false);
+      if (ai.confirmToken) { aiConfirmSend(); return; }
       if (state.hcConfirmId) { homeSend(state.hcConfirmId); }
       state.hcConfirmId = null;
     }), false);
     $('hc-no').addEventListener('click', overlayTap(function () {
       setOverlay('hc-confirm', false);
+      ai.confirmToken = null;
       state.hcConfirmId = null;
     }), false);
     $('up-prev').addEventListener('click', function () { state.upPage--; renderUptime(); }, false);

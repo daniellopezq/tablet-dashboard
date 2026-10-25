@@ -1,7 +1,15 @@
-"""Standalone-question AI assistant backend (Vercel AI Gateway, OpenAI-compatible).
+"""AI assistant backend (Vercel AI Gateway, OpenAI-compatible), with "Ask the house" (0.22.0).
 
-Each question is sent alone with a short system instruction: no history, no tools.
-Python 3 standard library only. The API key is read from the environment or a private
+A question goes, in order, to:
+  1. homeai.House.match(): simple home commands and state questions, answered here without the AI and
+     without using the Ask quota ("apaga el abanico", "what's on?").
+  2. The cloud model (or the local fallback when the cloud sends no response) with the house block in
+     the prompt, answering as JSON {"say", "actions", "look"}; actions go through House.run_actions(),
+     which only knows the Home tiles and holds back the ones that need confirmation.
+  3. For camera questions ("look"), the cloud model again with one camera picture. Images are never sent
+     to the local model; offline, the answer says the internet is needed.
+A short per-conversation memory (the last few turns, forgotten after memory_seconds idle) makes
+follow-ups work. Python 3 standard library only. The API key is read from the environment or a private
 .env file and is never logged, returned to clients or written anywhere else.
 
 Global usage limits (min interval, per-hour, per-day) are enforced here and persisted in a
@@ -45,6 +53,40 @@ LOCAL_SYSTEM_PROMPT = (
     "question. Use plain text only: no markdown, no asterisks, no LaTeX or math notation. "
     "If you are not sure of a fact, say so briefly."
 )
+# With home_control on (and a house to control), the model answers as JSON. The HOUSE block (button ids,
+# names, states; camera ids and names) follows this text.
+HOUSE_PROMPT = (
+    "You are the voice assistant of a home dashboard. Reply ONLY with one JSON object and nothing else:\n"
+    '{"say": "...", "actions": [{"button": "<id>", "to": "on|off|press|plex|jellyfin"}], "look": ""}\n'
+    "Rules:\n"
+    "- say: the reply for the person, plain text, short (usually under 60 words), in the same language "
+    "as their last message. No markdown.\n"
+    "- actions: only when the person clearly tells you to change something, and only with button ids listed under "
+    "HOUSE. Use \"press\" for press-only buttons, \"plex\" or \"jellyfin\" for the media switch. "
+    "Buttons that need confirmation will be confirmed on screen; still list them.\n"
+    "- Questions about the house: answer from the states listed under HOUSE.\n"
+    "- If you are suggesting something or asking whether to do it (\"¿quieres que apague…?\"), leave actions "
+    "empty and wait for the answer.\n"
+    "- look: when the person asks what a camera sees or whether someone is somewhere, set look to that "
+    "camera id and put a short 'let me look' line in say. Never invent what a camera shows.\n"
+    "- If the request is unclear, ask a short question in say and leave actions empty.\n"
+    "- WEATHER under HOUSE is the live local forecast; use it for weather questions.\n"
+    "- Anything not about the house: just answer in say. You have no access to calendars or the internet; "
+    "don't claim to have checked them."
+)
+LOCAL_HOUSE_PROMPT = (
+    "You control a home dashboard. Reply ONLY with JSON: "
+    '{"say": "<short plain-text reply in the language of the question>", '
+    '"actions": [{"button": "<id from HOUSE>", "to": "on|off|press"}], "look": ""}. '
+    "Use actions only when clearly told to change something and only with ids listed under HOUSE; when "
+    "suggesting or asking, leave actions empty. "
+    "For questions, answer in say from the HOUSE states or your knowledge, in one or two sentences."
+)
+LOOK_PROMPT = (
+    "You are looking at a still picture from the home camera \"%s\"%s. Answer the person's question "
+    "about it in one to three short sentences, in the same language as the question, plain text only. "
+    "Describe only what is visible; if you can't tell, say so. Don't guess who people are."
+)
 LOCAL_TEMPERATURE = 0.3  # the 2B model was most accurate at low temperature in testing
 
 KEY_ENV = "AI_GATEWAY_API_KEY"
@@ -82,7 +124,14 @@ DEFAULT_ASSISTANT_CONFIG = {
     "fallback_timeout_seconds": 25,
     "no_response_seconds": 5,
     "cloud_cooldown_seconds": 60,
+    # Ask the house (0.22.0): Home tiles and cameras through the assistant, see homeai.py.
+    "home_control": True,
+    "memory_turns": 6,         # messages (questions + answers) remembered per conversation
+    "memory_seconds": 120,     # forgotten after this long without a new question
+    "look_max_age_seconds": 60,  # a Home Assistant snapshot older than this gets refreshed first
 }
+MAX_CONVERSATIONS = 20
+CONVERSATION_RE = re.compile(r"^[a-z0-9-]{8,40}$")
 
 
 def now_ms():
@@ -124,6 +173,11 @@ def validate_assistant_config(a):
     for key in ("price_per_million_input_usd", "price_per_million_output_usd"):
         if a[key] is not None and (not _num(a[key]) or a[key] < 0):
             raise ValueError("assistant.%s must be a non-negative number or null" % key)
+    if not isinstance(a["home_control"], bool):
+        raise ValueError("assistant.home_control must be true or false")
+    for key, lo, hi in (("memory_turns", 0, 20), ("memory_seconds", 10, 3600), ("look_max_age_seconds", 10, 3600)):
+        if not isinstance(a[key], int) or isinstance(a[key], bool) or not lo <= a[key] <= hi:
+            raise ValueError("assistant.%s must be an integer %d-%d" % (key, lo, hi))
     validate_fallback_config(a, "assistant", (16, 4096))
 
 
@@ -251,15 +305,54 @@ class RequestError(Exception):
         self.status, self.code, self.message = status, code, message
 
 
-def parse_question(raw, cfg):
-    """Validate the JSON body and return the question string (RequestError on bad input)."""
+def _parse_json_object(raw):
     try:
         data = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         raise RequestError(400, "bad_request", "Request must be valid JSON.")
-    if not isinstance(data, dict) or set(data.keys()) != {"question"}:
-        raise RequestError(400, "bad_request", "Request must be an object with only a question.")
-    q = data["question"]
+    if not isinstance(data, dict):
+        raise RequestError(400, "bad_request", "Request must be a JSON object.")
+    return data
+
+
+def _parse_conversation(data):
+    conv = data.get("conversation")
+    if conv is not None and not (isinstance(conv, str) and CONVERSATION_RE.match(conv)):
+        raise RequestError(400, "bad_request", "conversation must be 8-40 of a-z 0-9 -.")
+    speak = data.get("speak", False)
+    if not isinstance(speak, bool):
+        raise RequestError(400, "bad_request", "speak must be true or false.")
+    return conv, speak
+
+
+def parse_request(raw, cfg):
+    """{"question", "conversation" (or None), "speak"} from the Ask body (RequestError on bad input)."""
+    data = _parse_json_object(raw)
+    if "question" not in data or not set(data.keys()) <= {"question", "conversation", "speak"}:
+        raise RequestError(400, "bad_request", "Request must be an object with a question "
+                                               "(and optionally conversation and speak).")
+    conv, speak = _parse_conversation(data)
+    return {"question": _check_question(data["question"], cfg), "conversation": conv, "speak": speak}
+
+
+def parse_confirm(raw):
+    """{"token", "conversation", "speak"} from a confirm body (RequestError on bad input)."""
+    data = _parse_json_object(raw)
+    if "token" not in data or not set(data.keys()) <= {"token", "conversation", "speak"}:
+        raise RequestError(400, "bad_request", "Request must be an object with a token.")
+    token = data["token"]
+    if not isinstance(token, str) or not re.match(r"^[A-Za-z0-9_-]{8,64}$", token):
+        raise RequestError(400, "bad_request", "Invalid token.")
+    conv, speak = _parse_conversation(data)
+    return {"token": token, "conversation": conv, "speak": speak}
+
+
+def parse_question(raw, cfg):
+    """Validate the JSON body and return the question string (RequestError on bad input)."""
+    return parse_request(raw, cfg)["question"]
+
+
+def _check_question(q, cfg):
     if not isinstance(q, str):
         raise RequestError(400, "bad_request", "The question must be text.")
     q = q.strip()
@@ -504,10 +597,81 @@ def post_bounded(opener, cloud, req, timeout, limit, no_response_seconds=None):
     return b"".join(chunks)
 
 
+class Conversations:
+    """Short-term memory: the last few messages of each conversation (the page's random id), in memory
+    only, forgotten after `seconds` without a new question. Also the last camera looked at."""
+
+    def __init__(self, cfg, clock):
+        self.cfg = cfg
+        self.clock = clock  # milliseconds
+        self._lock = threading.Lock()
+        self._items = {}    # id -> {"messages": [...], "last_camera": id|None, "at": ms}
+
+    def get(self, cid):
+        if not cid or self.cfg["memory_turns"] == 0:
+            return None
+        now = self.clock()
+        with self._lock:
+            item = self._items.get(cid)
+            if item is None or now - item["at"] > self.cfg["memory_seconds"] * 1000:
+                self._items.pop(cid, None)
+                return None
+            return {"messages": list(item["messages"]), "last_camera": item["last_camera"]}
+
+    def add(self, cid, question, answer, camera=None):
+        if not cid or self.cfg["memory_turns"] == 0:
+            return
+        now = self.clock()
+        limit = self.cfg["memory_seconds"] * 1000
+        with self._lock:
+            for k in [k for k, v in self._items.items() if now - v["at"] > limit]:
+                del self._items[k]
+            item = self._items.get(cid) or {"messages": [], "last_camera": None}
+            item["messages"] = (item["messages"] + [{"role": "user", "content": question},
+                                                    {"role": "assistant", "content": answer}])[-self.cfg["memory_turns"]:]
+            if camera:
+                item["last_camera"] = camera
+            item["at"] = now
+            self._items[cid] = item
+            while len(self._items) > MAX_CONVERSATIONS:
+                oldest = min(self._items, key=lambda k: self._items[k]["at"])
+                del self._items[oldest]
+
+
+def parse_house_reply(text):
+    """{"say", "actions": [(id, to)], "look"} from the model's JSON reply. Not JSON (a model that ignored
+    the format, or a cut-off reply): the text itself is the answer, with no actions."""
+    raw = (text or "").strip()
+    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw)
+    start, end = raw.find("{"), raw.rfind("}")
+    data = None
+    if start >= 0 and end > start:
+        try:
+            data = json.loads(raw[start:end + 1])
+        except (ValueError, RecursionError):
+            data = None
+    if not isinstance(data, dict):
+        m = re.search(r'"say"\s*:\s*"((?:[^"\\]|\\.)*)', raw)
+        say = json.loads('"%s"' % m.group(1)) if m else ("" if raw.startswith("{") else raw)
+        return {"say": fb.plain_text(say), "actions": [], "look": ""}
+    say = data.get("say")
+    actions = []
+    for a in data.get("actions") or []:
+        if isinstance(a, dict) and isinstance(a.get("button"), str) and isinstance(a.get("to"), str):
+            actions.append((a["button"].strip(), a["to"].strip().lower()))
+    look = data.get("look")
+    return {"say": fb.plain_text(say) if isinstance(say, str) else "", "actions": actions[:8],
+            "look": look.strip() if isinstance(look, str) else ""}
+
+
 class Assistant:
     def __init__(self, cfg, tz, base_dir, clock=now_ms):
         self.cfg = cfg
+        self.tz = tz
         self.clock = clock
+        self.house = None     # homeai.House, set by the app when Home/Cameras exist
+        self.speaker = None   # tts.Speaker, set by the app
+        self.memory = Conversations(cfg, clock)
         self.env_path = os.path.join(base_dir, cfg["env_file"])
         self.store = UsageStore(os.path.join(base_dir, cfg["state_file"]),
                                 os.path.join(base_dir, cfg["usage_log"]), tz, clock)
@@ -543,7 +707,9 @@ class Assistant:
                "max_question_chars": self.cfg["max_question_chars"],
                "min_interval_seconds": self.cfg["min_interval_seconds"],
                "limits": {"per_hour": self.cfg["max_per_hour"], "per_day": self.cfg["max_per_day"]},
-               "fallback": {"enabled": self.cfg["fallback_enabled"], "cloud_cooling_down": self.gate.cooling_down()}}
+               "fallback": {"enabled": self.cfg["fallback_enabled"], "cloud_cooling_down": self.gate.cooling_down()},
+               "home_control": self._active_house() is not None,
+               "speech": self.speaker.status() if self.speaker is not None else {"enabled": False, "available": False}}
         try:
             out.update(self.store.snapshot(self.limits))
         except (OSError, ValueError, TypeError):
@@ -558,10 +724,129 @@ class Assistant:
             error["retry_after"] = int(retry_after)
         return status, {"ok": False, "error": error}
 
-    def ask(self, question):
+    def _speech(self, body, speak):
+        if speak and body.get("ok") and body.get("answer") and self.speaker is not None:
+            try:
+                sid = self.speaker.prepare(body["answer"])
+            except Exception:
+                log.error("assistant: could not prepare speech")
+                sid = None
+            if sid:
+                body["speech_id"] = sid
+        return body
+
+    def _active_house(self):
+        h = self.house
+        if h is None or not self.cfg["home_control"]:
+            return None
+        return h if (h.buttons() or h.camera_list()) else None
+
+    def ask(self, question, conversation=None, speak=False):
         """Return (http_status, json_body). Never raises."""
+        try:
+            status, body = self._ask(question, conversation)
+        except Exception:  # defensive: the house layer must never break plain questions
+            log.exception("assistant: unexpected failure")
+            status, body = self._err(500, "internal_error", "Something went wrong answering that.")
+        return status, self._speech(body, speak)
+
+    def _ask(self, question, conversation):
+        import homeai  # local import: homeai -> home -> assistant
         if not self.cfg["enabled"]:
             return self._err(503, "disabled", "The assistant is turned off on the server.")
+        house = self._active_house()
+        conv = self.memory.get(conversation)
+        lang = homeai.lang_of(question)
+        if house is not None:
+            intent = house.match(question, conv["last_camera"] if conv else None)
+            if intent and intent["type"] == "state":
+                answer = house.state_answer(intent["ids"], lang)
+                self.memory.add(conversation, question, answer)
+                return 200, {"ok": True, "answer": answer, "truncated": False, "source": "house"}
+            if intent and intent["type"] == "actions":
+                answer, done, confirm = house.run_actions(intent["actions"], lang, conversation)
+                self.memory.add(conversation, question, answer)
+                body = {"ok": True, "answer": answer, "truncated": False, "source": "house", "actions_done": done}
+                if confirm:
+                    body["confirm"] = confirm
+                return 200, body
+            if intent and intent["type"] == "look":
+                return self._look(house, intent["camera"], question, conversation, conv, lang)
+        ctx = {"history": conv["messages"] if conv else []}
+        if house is not None:
+            ctx["house"] = house.context_text(datetime.fromtimestamp(self.clock() / 1000, self.tz)
+                                              .strftime("local time %a %d %b %H:%M"))
+        status, body = self._ask_model(question, ctx)
+        if not body.get("ok") or house is None:
+            if body.get("ok"):
+                self.memory.add(conversation, question, body["answer"])
+            return status, body
+        reply = parse_house_reply(body["answer"])
+        actions = [v for v in (house.valid_action(b, t) for b, t in reply["actions"]) if v]
+        if len(actions) < len(reply["actions"]):
+            log.info("assistant: dropped %d action(s) for unknown buttons", len(reply["actions"]) - len(actions))
+        look = reply["look"] if any(c["id"] == reply["look"] for c in house.camera_list()) else ""
+        if look and not actions:
+            return self._look(house, look, question, conversation, conv, lang, followup=True)
+        answer = reply["say"]
+        if actions:
+            # Safety net for the rule above: a reply that asks ("¿quieres que apague…?") while listing actions
+            # gets them as an on-screen Yes/No instead of carrying them out before the person answers.
+            offered = "?" in answer
+            if offered:
+                log.info("assistant: reply asks a question; holding %d action(s) for confirmation", len(actions))
+            said, done, confirm = house.run_actions(actions, lang, conversation, confirm_all=offered)
+            # Offered: the model's own question is the answer; the Yes/No dialog lists the exact actions.
+            answer = answer if offered else said
+            body["actions_done"] = done
+            if confirm:
+                body["confirm"] = confirm
+        body["answer"] = answer or ("Listo." if lang == "es" else "Done.")
+        self.memory.add(conversation, question, body["answer"])
+        return status, body
+
+    def _look(self, house, cid, question, conversation, conv, lang, followup=False):
+        """Answer a camera question with one picture (cloud only)."""
+        import homeai
+        from home import ActionError
+        key, _problem = self._key_problem()
+        if key is None:
+            return self._err(503, "not_configured",
+                             "The assistant isn't set up yet. The API key must be added on the server (see README).")
+        if self.cfg["fallback_enabled"] and self.gate.cooling_down():
+            return 200, {"ok": True, "answer": homeai.phrase("offline_look", lang), "truncated": False,
+                         "source": "offline", "camera": cid}
+        try:
+            url, label, age = house.look(cid, self.cfg["look_max_age_seconds"])
+        except ActionError as exc:
+            return self._err(502, "camera_unavailable", "Couldn't get a picture from that camera: %s." % exc)
+        when = "" if age is None else (", taken just now" if age < 15 else ", taken about %d seconds ago" % age
+                                       if age < 120 else ", taken about %d minutes ago" % (age // 60))
+        ctx = {"history": conv["messages"] if conv else [], "image": (url, label, when), "followup": followup,
+               "weather": house.weather_text()}
+        status, body = self._ask_model(question, ctx)
+        if body.get("ok"):
+            body["answer"] = fb.plain_text(body["answer"])
+            body["camera"] = cid
+            self.memory.add(conversation, question, body["answer"], camera=cid)
+        return status, body
+
+    def confirm(self, token, conversation=None, speak=False):
+        """POST /api/assistant/confirm: carry out the actions held back for confirmation."""
+        from home import ActionError
+        house = self._active_house()
+        if house is None:
+            return self._err(404, "not_found", "Nothing to confirm.")
+        try:
+            answer, done = house.confirm(token, conversation)
+        except ActionError as exc:
+            return self._err(exc.code if 400 <= exc.code < 600 else 400, "confirm_failed", str(exc))
+        if conversation:
+            self.memory.add(conversation, "(confirmed)", answer)
+        return 200, self._speech({"ok": True, "answer": answer, "actions_done": done, "source": "house"}, speak)
+
+    def _ask_model(self, question, ctx):
+        """The cloud model (local fallback on no response). ctx: history, house block or camera image."""
         key, problem = self._key_problem()
         if key is None:
             return self._err(503, "not_configured",
@@ -571,7 +856,10 @@ class Assistant:
         started = self.clock()
         try:
             try:
-                allowed, info = self.store.reserve(self.limits)
+                # A camera look the model asked for comes right after its first call: only the hourly and
+                # daily limits apply to it, not the gap between questions.
+                limits = dict(self.limits, min_interval_seconds=0) if ctx.get("followup") else self.limits
+                allowed, info = self.store.reserve(limits)
             except (OSError, ValueError, TypeError):
                 return self._err(503, "unavailable", "The assistant's usage counters are unavailable, so it is paused.")
             if not allowed:
@@ -582,16 +870,18 @@ class Assistant:
                 entry["simulated"] = True
             use_fallback = self.cfg["fallback_enabled"]
             skipped = use_fallback and not self.gate.begin()
+            if ctx.get("image"):
+                entry["image"] = True
             if skipped:
-                return self._answer_locally(question, entry, started, remaining, skipped=True)
+                return self._answer_locally(question, entry, started, remaining, skipped=True, ctx=ctx)
             responded = True
             t0 = time.monotonic()
             try:
-                result = self._call_upstream(key, question)
+                result = self._call_upstream(key, question, ctx)
             except fb.NoResponse:
                 responded = False
                 entry["api_wait_ms"] = int((time.monotonic() - t0) * 1000)
-                return self._answer_locally(question, entry, started, remaining, skipped=False)
+                return self._answer_locally(question, entry, started, remaining, skipped=False, ctx=ctx)
             except UpstreamError as exc:
                 entry.update({"outcome": exc.category, "http_status": exc.http_status,
                               "duration_ms": self.clock() - started})
@@ -613,8 +903,16 @@ class Assistant:
         finally:
             self._inflight.release()
 
-    def _answer_locally(self, question, entry, started, remaining, skipped):
+    def _answer_locally(self, question, entry, started, remaining, skipped, ctx=None):
         """Answer with the local model after a cloud no-response (or during the cooldown)."""
+        ctx = ctx or {}
+        if ctx.get("image"):  # the local model has no vision: say so instead of guessing
+            import homeai
+            entry.update({"outcome": "image_offline", "cloud": "skipped" if skipped else "no_response",
+                          "duration_ms": self.clock() - started})
+            self._log_outcome(entry)
+            return 200, {"ok": True, "answer": homeai.phrase("offline_look", homeai.lang_of(question)),
+                         "truncated": False, "remaining": remaining, "source": "offline"}
         entry.update({"source": "local", "model": self.cfg["fallback_model"],
                       "cloud": "skipped" if skipped else "no_response"})
         t0 = time.monotonic()
@@ -624,7 +922,7 @@ class Assistant:
             failure = "local_busy"
         else:
             try:
-                result = self._call_local(question, deadline)
+                result = self._call_local(question, deadline, ctx)
             except UpstreamError as exc:
                 failure = exc.category
             except Exception:  # defensive, as for the cloud call
@@ -697,11 +995,28 @@ class Assistant:
             return self._err(502, "empty_answer", "The AI service returned no answer. Try rephrasing.")
         return self._err(502, "upstream_error", "The AI service returned an error. Try again later.")
 
-    def _build_payload(self, question):
+    @staticmethod
+    def _messages(system, question, ctx):
+        user = question
+        if ctx.get("image"):
+            user = [{"type": "text", "text": question},
+                    {"type": "image_url", "image_url": {"url": ctx["image"][0]}}]
+        return [{"role": "system", "content": system}] + list(ctx.get("history") or []) + \
+               [{"role": "user", "content": user}]
+
+    def _build_payload(self, question, ctx=None):
+        ctx = ctx or {}
+        if ctx.get("image"):
+            system = LOOK_PROMPT % (ctx["image"][1], ctx["image"][2])
+            if ctx.get("weather"):
+                system += "\n" + ctx["weather"]
+        elif ctx.get("house"):
+            system = HOUSE_PROMPT + "\n\n" + ctx["house"]
+        else:
+            system = SYSTEM_PROMPT
         payload = {
             "model": self.cfg["model"],
-            "messages": [{"role": "system", "content": SYSTEM_PROMPT},
-                         {"role": "user", "content": question}],
+            "messages": self._messages(system, question, ctx),
             "max_tokens": self.cfg["max_output_tokens"],
             "stream": False,
         }
@@ -710,8 +1025,8 @@ class Assistant:
             payload["reasoning"] = {"effort": "none"}
         return payload
 
-    def _call_upstream(self, key, question):
-        body = json.dumps(self._build_payload(question)).encode("utf-8")
+    def _call_upstream(self, key, question, ctx=None):
+        body = json.dumps(self._build_payload(question, ctx)).encode("utf-8")
         req = urllib.request.Request(
             self.cfg["base_url"].rstrip("/") + "/chat/completions", data=body, method="POST",
             headers={"Authorization": "Bearer " + key, "Content-Type": "application/json",
@@ -720,16 +1035,21 @@ class Assistant:
         return self._parse_success(post_bounded(self._opener, self._cloud, req, self.cfg["timeout_seconds"],
                                                 self.cfg["max_response_bytes"], no_response))
 
-    def _call_local(self, question, deadline):
+    def _call_local(self, question, deadline, ctx=None):
+        ctx = ctx or {}
+        house = ctx.get("house")
+        system = (LOCAL_HOUSE_PROMPT + "\n\n" + house) if house else LOCAL_SYSTEM_PROMPT
         payload = {
             "model": self.cfg["fallback_model"],
-            "messages": [{"role": "system", "content": LOCAL_SYSTEM_PROMPT},
-                         {"role": "user", "content": question}],
-            "max_tokens": self.cfg["fallback_max_output_tokens"],
+            "messages": self._messages(system, question, ctx),
+            # JSON adds ~40 tokens of keys and quotes around the same short answer.
+            "max_tokens": self.cfg["fallback_max_output_tokens"] + (60 if house else 0),
             "stream": False,
             "temperature": LOCAL_TEMPERATURE,
             "chat_template_kwargs": {"enable_thinking": False},  # Qwen: answer directly
         }
+        if house:
+            payload["response_format"] = {"type": "json_object"}  # llama-server: grammar-constrained JSON
         req = urllib.request.Request(
             self.cfg["fallback_base_url"].rstrip("/") + "/chat/completions",
             data=json.dumps(payload).encode("utf-8"), method="POST",
@@ -737,7 +1057,8 @@ class Assistant:
                      "User-Agent": "TabletDashboard-assistant"})
         timeout = max(0.1, deadline - time.monotonic())
         result = self._parse_success(post_bounded(self._opener, None, req, timeout, self.cfg["max_response_bytes"]))
-        result["answer"] = fb.plain_text(result["answer"])
+        if not house:  # JSON replies are cleaned after parsing (parse_house_reply)
+            result["answer"] = fb.plain_text(result["answer"])
         if not result["answer"]:
             raise UpstreamError("empty_answer", 200)
         return result
@@ -791,9 +1112,9 @@ class Assistant:
 def _cli(argv):
     """Maintenance commands: clear-block (used by scripts/set-assistant-key.sh)."""
     if len(argv) == 2 and argv[1] == "clear-block":
-        import server  # local import: config loading lives there
-        cfg = server.load_config(os.path.join(server.BASE_DIR, "config.json"))
-        a = Assistant(cfg["assistant"], ZoneInfo(cfg["timezone"]), server.BASE_DIR)
+        import config  # local import: the dashboard's config loader
+        cfg = config.load_config(os.path.join(config.BASE_DIR, "config.json"))
+        a = Assistant(cfg["assistant"], ZoneInfo(cfg["timezone"]), config.BASE_DIR)
         a.store.clear_block()
         print("assistant block cleared")
         return 0

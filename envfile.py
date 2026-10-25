@@ -1,6 +1,6 @@
 """Private files for the tablet dashboard: the .env secrets file and other owner-only files.
 
-Shared by gcal.py (sign-in), admin.py (API keys page) and the setup scripts. Values are never
+Shared by gcal.py (sign-in), admin/ (API keys page) and the setup scripts. Values are never
 logged. Python 3 standard library only.
 """
 import os

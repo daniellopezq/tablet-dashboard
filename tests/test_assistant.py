@@ -203,7 +203,7 @@ class AssistantTestCase(DashboardTestCase):
 
 class SuccessAndPayloadTests(AssistantTestCase):
     def test_success_payload_and_usage_log(self):
-        port = self.serve_ai()
+        port = self.serve_ai(home_control=False)  # the plain prompt; the house prompt has its own tests
         resp, data = self.post(port, {"question": "What is 2+2?"})
         self.assertEqual(resp.status, 200)
         self.assertEqual(data["ok"], True)
@@ -617,7 +617,7 @@ class SecretHygieneTests(AssistantTestCase):
                                 "(KHTML, like Gecko) Chrome/50.0.2661.89 Safari/537.36"}
         html = self.request(port, "/", headers=tablet)[1]
         self.assertIn(b"view-assistant", html)
-        self.assertIn(b"Each question starts fresh.", html)
+        self.assertIn("Also controls the house".encode(), html)
         with open(os.path.join(app.web_root, "app.js")) as f:
             js = f.read()
         self.assertNotIn("fetch(", js)

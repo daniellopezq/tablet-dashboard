@@ -4,491 +4,47 @@
 Serves the static dashboard from web/, a server-time API, cached Open-Meteo
 weather, cached Google Calendar events, and test media from media/. Python 3 standard library only.
 See README.md for configuration and operation.
+
+This file wires the services together (App) and runs the http/https listeners. Configuration is in
+config.py, URL routing in routes/, response helpers in httpcore.py.
 """
 import argparse
-import email.utils
-import json
 import logging
 import os
-import re
 import signal
 import ssl
 import sys
 import threading
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 import admin as admin_mod
 import assistant as assistant_mod
 import cameras as cameras_mod
 import gcal as gcal_mod
+import googletts
 import health as health_mod
 import home as home_mod
+import homeai
+import httpcore
 import localai as localai_mod
 import maps as maps_mod
 import netsim
-import uidetect
+import pgstore
+import routes
+import tts as tts_mod
 import voice as voice_mod
+# Re-exported: tests and older callers use server.load_config, server.parse_range, etc.
+from config import BASE_DIR, DEFAULT_CONFIG, ConfigError, load_config, validate_config  # noqa: F401
+from httpcore import MEDIA_TYPES, STATIC_TYPES, parse_range, resolve_under  # noqa: F401
+from weather import WeatherService
 
-VERSION = "0.21.2"
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+VERSION = "0.25.1"
 USER_AGENT = "TabletDashboard/%s (personal home dashboard)" % VERSION
 
-DEFAULT_CONFIG = {
-    "bind": "0.0.0.0",
-    "port": 8099,
-    "https_port": None,
-    "tls_cert": "data/tls/server.crt",
-    "tls_key": "data/tls/server.key",
-    "timezone": "UTC",
-    "clock_default_24h": True,
-    "web_dir": "web",
-    "modern_dir": "web-modern",
-    "media_dir": "media",
-    "ui": {
-        "modern_enabled": True,
-    },
-    "weather": {
-        "latitude": None,
-        "longitude": None,
-        "label": "",
-        "timezone": "UTC",
-        "temperature_unit": "celsius",
-        "refresh_minutes": 15,
-        "stale_after_minutes": 35,
-        "timeout_seconds": 10,
-        "max_response_bytes": 262144,
-        "api_url": OPEN_METEO_URL,
-    },
-    "assistant": dict(assistant_mod.DEFAULT_ASSISTANT_CONFIG),
-    "maps": dict(maps_mod.DEFAULT_MAPS_CONFIG),
-    "voice": dict(voice_mod.DEFAULT_VOICE_CONFIG),
-    "calendar": dict(gcal_mod.DEFAULT_CALENDAR_CONFIG),
-    "local_ai": dict(localai_mod.DEFAULT_LOCAL_AI_CONFIG),
-    "health": dict(health_mod.DEFAULT_HEALTH_CONFIG),
-    "kuma": dict(health_mod.DEFAULT_KUMA_CONFIG),
-    "admin": dict(admin_mod.DEFAULT_ADMIN_CONFIG),
-    "home": dict(home_mod.DEFAULT_HOME_CONFIG),
-    "cameras": dict(cameras_mod.DEFAULT_CAMERAS_CONFIG),
-}
-
-STATIC_TYPES = {
-    ".html": "text/html; charset=utf-8",
-    ".css": "text/css; charset=utf-8",
-    ".js": "application/javascript; charset=utf-8",
-    ".svg": "image/svg+xml",
-    ".png": "image/png",
-    ".ico": "image/x-icon",
-    ".txt": "text/plain; charset=utf-8",
-    ".crt": "application/x-x509-ca-cert",  # public CA certificate for optional install on the tablet
-}
-MEDIA_TYPES = {
-    ".mp4": "video/mp4",
-    ".m4v": "video/mp4",
-    ".webm": "video/webm",
-}
-
-CSP = ("default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self'; "
-       "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; "
-       "form-action 'none'")
-
-# WMO weather interpretation codes, per https://open-meteo.com/en/docs
-WMO_CODES = {
-    0: ("Clear sky", "clear"),
-    1: ("Mainly clear", "clear"),
-    2: ("Partly cloudy", "partly"),
-    3: ("Overcast", "cloud"),
-    45: ("Fog", "fog"),
-    48: ("Rime fog", "fog"),
-    51: ("Light drizzle", "rain"),
-    53: ("Drizzle", "rain"),
-    55: ("Dense drizzle", "rain"),
-    56: ("Freezing drizzle", "rain"),
-    57: ("Freezing drizzle", "rain"),
-    61: ("Light rain", "rain"),
-    63: ("Rain", "rain"),
-    65: ("Heavy rain", "rain"),
-    66: ("Freezing rain", "rain"),
-    67: ("Freezing rain", "rain"),
-    71: ("Light snow", "snow"),
-    73: ("Snow", "snow"),
-    75: ("Heavy snow", "snow"),
-    77: ("Snow grains", "snow"),
-    80: ("Rain showers", "rain"),
-    81: ("Rain showers", "rain"),
-    82: ("Violent showers", "rain"),
-    85: ("Snow showers", "snow"),
-    86: ("Heavy snow showers", "snow"),
-    95: ("Thunderstorm", "storm"),
-    96: ("Thunderstorm, hail", "storm"),
-    97: ("Heavy thunderstorm", "storm"),
-    99: ("Thunderstorm, hail", "storm"),
-}
-
 log = logging.getLogger("dashboard")
-
-
-class ConfigError(Exception):
-    pass
-
-
-def now_ms():
-    return int(time.time() * 1000)
-
-
-def _is_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-
-def _load_zone(name, key):
-    if not isinstance(name, str) or not name:
-        raise ConfigError("%s must be an IANA timezone name" % key)
-    try:
-        return ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError):
-        raise ConfigError("%s: unknown timezone %r" % (key, name))
-
-
-def load_config(path):
-    """Return the merged, validated configuration. Keys starting with '_' are comments."""
-    cfg = json.loads(json.dumps(DEFAULT_CONFIG))
-    if path and os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            try:
-                user = json.load(f)
-            except json.JSONDecodeError as exc:
-                raise ConfigError("%s: invalid JSON: %s" % (path, exc))
-        if not isinstance(user, dict):
-            raise ConfigError("config root must be a JSON object")
-        for key, value in user.items():
-            if key.startswith("_"):
-                continue
-            if key not in cfg:
-                raise ConfigError("unknown config key: %s" % key)
-            if isinstance(DEFAULT_CONFIG[key], dict):
-                if not isinstance(value, dict):
-                    raise ConfigError("%s must be a JSON object" % key)
-                for wkey, wvalue in value.items():
-                    if wkey.startswith("_"):
-                        continue
-                    if wkey not in cfg[key]:
-                        raise ConfigError("unknown config key: %s.%s" % (key, wkey))
-                    cfg[key][wkey] = wvalue
-            else:
-                cfg[key] = value
-    validate_config(cfg)
-    return cfg
-
-
-def validate_config(cfg):
-    if not isinstance(cfg["port"], int) or not 1 <= cfg["port"] <= 65535:
-        raise ConfigError("port must be an integer 1-65535")
-    hp = cfg["https_port"]
-    if hp is not None and (not isinstance(hp, int) or isinstance(hp, bool) or not 1 <= hp <= 65535 or hp == cfg["port"]):
-        raise ConfigError("https_port must be null or an integer 1-65535 different from port")
-    for key in ("tls_cert", "tls_key"):
-        if not isinstance(cfg[key], str) or not cfg[key]:
-            raise ConfigError("%s must be a path" % key)
-    if not isinstance(cfg["bind"], str):
-        raise ConfigError("bind must be a string")
-    if not isinstance(cfg["clock_default_24h"], bool):
-        raise ConfigError("clock_default_24h must be true or false")
-    if not isinstance(cfg["modern_dir"], str) or not cfg["modern_dir"]:
-        raise ConfigError("modern_dir must be a path")
-    if not isinstance(cfg["ui"]["modern_enabled"], bool):
-        raise ConfigError("ui.modern_enabled must be true or false")
-    _load_zone(cfg["timezone"], "timezone")
-
-    w = cfg["weather"]
-    lat, lon = w["latitude"], w["longitude"]
-    if (lat is None) != (lon is None):
-        raise ConfigError("weather.latitude and weather.longitude must both be set or both be null")
-    if lat is not None:
-        if not _is_number(lat) or not -90 <= lat <= 90:
-            raise ConfigError("weather.latitude must be a number between -90 and 90")
-        if not _is_number(lon) or not -180 <= lon <= 180:
-            raise ConfigError("weather.longitude must be a number between -180 and 180")
-    if not isinstance(w["label"], str):
-        raise ConfigError("weather.label must be a string")
-    _load_zone(w["timezone"], "weather.timezone")
-    if w["temperature_unit"] not in ("celsius", "fahrenheit"):
-        raise ConfigError("weather.temperature_unit must be 'celsius' or 'fahrenheit'")
-    if not _is_number(w["refresh_minutes"]) or w["refresh_minutes"] < 5:
-        raise ConfigError("weather.refresh_minutes must be at least 5")
-    if not _is_number(w["stale_after_minutes"]) or w["stale_after_minutes"] <= 0:
-        raise ConfigError("weather.stale_after_minutes must be positive")
-    if not _is_number(w["timeout_seconds"]) or not 0 < w["timeout_seconds"] <= 60:
-        raise ConfigError("weather.timeout_seconds must be between 0 and 60")
-    if not isinstance(w["max_response_bytes"], int) or not 1024 <= w["max_response_bytes"] <= 4194304:
-        raise ConfigError("weather.max_response_bytes must be an integer 1024-4194304")
-    if not isinstance(w["api_url"], str) or not re.match(r"^https?://", w["api_url"]):
-        raise ConfigError("weather.api_url must be an http(s) URL")
-    try:
-        assistant_mod.validate_assistant_config(cfg["assistant"])
-        maps_mod.validate_maps_config(cfg["maps"])
-        voice_mod.validate_voice_config(cfg["voice"])
-        gcal_mod.validate_calendar_config(cfg["calendar"])
-        localai_mod.validate_local_ai_config(cfg["local_ai"])
-        health_mod.validate_health_config(cfg["health"])
-        health_mod.validate_kuma_config(cfg["kuma"])
-        admin_mod.validate_admin_config(cfg["admin"])
-        home_mod.validate_home_config(cfg["home"])
-        cameras_mod.validate_cameras_config(cfg["cameras"])
-    except (ValueError, KeyError, TypeError) as exc:
-        raise ConfigError(str(exc))
-
-
-class WeatherError(Exception):
-    pass
-
-
-class WeatherService:
-    """Fetches Open-Meteo in a background thread; requests only ever read the cache."""
-
-    def __init__(self, wcfg):
-        self.cfg = wcfg
-        self.configured = wcfg["latitude"] is not None
-        self.unit = "F" if wcfg["temperature_unit"] == "fahrenheit" else "C"
-        self._lock = threading.Lock()
-        self._data = None
-        self._updated_ms = None
-        self._last_attempt_ms = None
-        self._last_error = None
-        self._failures = 0
-        self._stop = threading.Event()
-        self._wake = threading.Event()
-        self._thread = None
-
-    def build_url(self):
-        w = self.cfg
-        params = {
-            "latitude": "%.4f" % w["latitude"],
-            "longitude": "%.4f" % w["longitude"],
-            "current": "temperature_2m,relative_humidity_2m,weather_code,is_day",
-            "daily": "weather_code,temperature_2m_max,temperature_2m_min",
-            "timezone": w["timezone"],
-            "temperature_unit": w["temperature_unit"],
-            "forecast_days": "4",
-        }
-        return w["api_url"] + "?" + urllib.parse.urlencode(params, safe=",/")
-
-    def _download(self):
-        limit = self.cfg["max_response_bytes"]
-        timeout = self.cfg["timeout_seconds"]
-        deadline = time.monotonic() + timeout * 2
-        req = urllib.request.Request(self.build_url(), headers={
-            "User-Agent": USER_AGENT, "Accept": "application/json"})
-        if netsim.blocked("weather"):
-            log.warning("weather: network error (offline test)")
-            raise WeatherError("network error")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                length = resp.headers.get("Content-Length")
-                if length and length.isdigit() and int(length) > limit:
-                    raise WeatherError("response too large")
-                chunks, total = [], 0
-                while True:
-                    chunk = resp.read(16384)
-                    if not chunk:
-                        break
-                    total += len(chunk)
-                    if total > limit:
-                        raise WeatherError("response too large")
-                    if time.monotonic() > deadline:
-                        raise WeatherError("timeout")
-                    chunks.append(chunk)
-        except urllib.error.HTTPError as exc:
-            reason = ""
-            try:
-                body = json.loads(exc.read(4096).decode("utf-8", "replace"))
-                reason = str(body.get("reason", ""))[:200]
-            except Exception:
-                pass
-            log.warning("weather: HTTP %s %s", exc.code, reason)
-            raise WeatherError("HTTP %d" % exc.code)
-        except WeatherError:
-            raise
-        except (TimeoutError, OSError) as exc:
-            # urllib.error.URLError is an OSError subclass; socket timeouts arrive here too.
-            text = "timeout" if "timed out" in str(exc) else "network error"
-            log.warning("weather: %s (%s)", text, exc)
-            raise WeatherError(text)
-        try:
-            return json.loads(b"".join(chunks).decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            raise WeatherError("invalid response")
-
-    def normalize(self, raw):
-        try:
-            cur, daily = raw["current"], raw["daily"]
-            temp, hum, code = cur["temperature_2m"], cur["relative_humidity_2m"], cur["weather_code"]
-            if not _is_number(temp) or not isinstance(code, int):
-                raise WeatherError("invalid response")
-            dates = daily["time"]
-            days = []
-            for i in range(min(4, len(dates))):
-                dcode = daily["weather_code"][i]
-                hi, lo = daily["temperature_2m_max"][i], daily["temperature_2m_min"][i]
-                if not isinstance(dates[i], str) or not re.match(r"^\d{4}-\d{2}-\d{2}$", dates[i]):
-                    raise WeatherError("invalid response")
-                label, icon = WMO_CODES.get(dcode, ("Unknown", "unknown"))
-                days.append({
-                    "date": dates[i],
-                    "code": dcode if isinstance(dcode, int) else None,
-                    "condition": label,
-                    "icon": icon,
-                    "max": hi if _is_number(hi) else None,
-                    "min": lo if _is_number(lo) else None,
-                })
-            if not days:
-                raise WeatherError("invalid response")
-        except (KeyError, TypeError, IndexError):
-            raise WeatherError("invalid response")
-        label, icon = WMO_CODES.get(code, ("Unknown", "unknown"))
-        is_day = bool(cur.get("is_day", 1))
-        if icon == "clear" and not is_day:
-            icon = "clear-night"
-        elif icon == "partly" and not is_day:
-            icon = "partly-night"
-        return {
-            "current": {
-                "temperature": temp,
-                "humidity": hum if _is_number(hum) else None,
-                "code": code,
-                "condition": label,
-                "icon": icon,
-                "is_day": is_day,
-            },
-            "today": days[0],
-            "forecast": days[1:],
-        }
-
-    def fetch_once(self):
-        """Fetch and cache weather. Returns True on success. Never raises."""
-        if not self.configured:
-            return False
-        started = now_ms()
-        try:
-            data = self.normalize(self._download())
-        except WeatherError as exc:
-            with self._lock:
-                self._last_attempt_ms = started
-                self._last_error = str(exc)
-                self._failures += 1
-            return False
-        except Exception:
-            log.exception("weather: unexpected error")
-            with self._lock:
-                self._last_attempt_ms = started
-                self._last_error = "internal error"
-                self._failures += 1
-            return False
-        with self._lock:
-            self._data = data
-            self._updated_ms = now_ms()
-            self._last_attempt_ms = started
-            self._last_error = None
-            self._failures = 0
-        log.info("weather: updated")
-        return True
-
-    def next_delay(self):
-        refresh = self.cfg["refresh_minutes"] * 60
-        with self._lock:
-            failures = self._failures
-        if failures == 0:
-            return refresh
-        return min(refresh, 60 * (2 ** (failures - 1)))  # 1, 2, 4, 8 min, then refresh
-
-    def snapshot(self):
-        with self._lock:
-            snap = {
-                "configured": self.configured,
-                "label": self.cfg["label"],
-                "unit": self.unit,
-                "updated_ms": self._updated_ms,
-                "last_attempt_ms": self._last_attempt_ms,
-                "error": self._last_error,
-                "stale": False,
-                "data": self._data,
-                "attribution": {"text": "Weather data by Open-Meteo.com",
-                                "url": "https://open-meteo.com/",
-                                "license": "CC BY 4.0"},
-            }
-            if not self.configured:
-                snap["status"] = "unconfigured"
-            elif self._data is None:
-                snap["status"] = "error" if self._last_error else "loading"
-            else:
-                snap["status"] = "ok"
-                age_ms = now_ms() - self._updated_ms
-                snap["stale"] = (self._last_error is not None
-                                 or age_ms > self.cfg["stale_after_minutes"] * 60000)
-        return snap
-
-    def _run(self):
-        while not self._stop.is_set():
-            self.fetch_once()
-            self._wake.wait(self.next_delay())
-            self._wake.clear()
-
-    def wake(self):
-        """Fetch now (admin page)."""
-        self._wake.set()
-
-    def start(self):
-        if not self.configured:
-            log.info("weather: location not configured; not fetching")
-            return
-        self._thread = threading.Thread(target=self._run, name="weather", daemon=True)
-        self._thread.start()
-
-    def stop(self):
-        self._stop.set()
-        self._wake.set()
-
-
-def resolve_under(root, rel):
-    """Map a URL path (still percent-encoded) to a regular file inside root, or None.
-
-    Rejects traversal, hidden segments, backslashes, NUL, directories and symlinks
-    that resolve outside root.
-    """
-    path = urllib.parse.unquote(rel)
-    if "\x00" in path or "\\" in path:
-        return None
-    parts = [p for p in path.split("/") if p]
-    if not parts or any(p.startswith(".") for p in parts):
-        return None
-    real = os.path.realpath(os.path.join(root, *parts))
-    if not real.startswith(root + os.sep) or not os.path.isfile(real):
-        return None
-    return real
-
-
-def parse_range(header, size):
-    """Return (start, end) inclusive, None to serve the whole file, or 'unsatisfiable'."""
-    m = re.fullmatch(r"\s*bytes=(\d*)-(\d*)\s*", header or "")
-    if not m or (m.group(1) == "" and m.group(2) == ""):
-        return None  # absent, malformed or multi-range: ignore and send 200
-    if m.group(1) == "":
-        suffix = int(m.group(2))
-        if suffix == 0 or size == 0:
-            return "unsatisfiable"
-        return max(0, size - suffix), size - 1
-    start = int(m.group(1))
-    if start >= size:
-        return "unsatisfiable"
-    end = int(m.group(2)) if m.group(2) else size - 1
-    if end < start:
-        return None
-    return start, min(end, size - 1)
 
 
 class App:
@@ -498,7 +54,9 @@ class App:
         self.web_root = os.path.realpath(os.path.join(BASE_DIR, cfg["web_dir"]))
         self.modern_root = os.path.realpath(os.path.join(BASE_DIR, cfg["modern_dir"]))
         self.media_root = os.path.realpath(os.path.join(BASE_DIR, cfg["media_dir"]))
-        self.weather = WeatherService(cfg["weather"])
+        self.weather = WeatherService(cfg["weather"], USER_AGENT)
+        self.db = pgstore.Database(cfg["database"])
+        self.weather.on_update = lambda data: self.db.record_weather(cfg["weather"]["label"], data)
         self.assistant = assistant_mod.Assistant(cfg["assistant"], self.tz, BASE_DIR)
         self.voice = voice_mod.Transcriber(cfg["voice"], self.tz, BASE_DIR)
         w = cfg["weather"]
@@ -512,6 +70,14 @@ class App:
         self.home = home_mod.Home(cfg["home"], BASE_DIR)
         self.health.stopped_hint = self.home.intentionally_stopped
         self.cameras = cameras_mod.Cameras(cfg["cameras"], self.home)
+        google_tts = googletts.GoogleTTS(cfg["tts"], os.path.join(BASE_DIR, cfg["tts"]["google_key_file"]),
+                                         os.path.join(BASE_DIR, "data", "google-tts-usage.json"))
+        self.speaker = tts_mod.Speaker(cfg["tts"], bank_dir=os.path.join(BASE_DIR, "data", "tts-phrases"),
+                                       google=google_tts)
+        self.assistant.speaker = self.speaker
+        self.assistant.house = homeai.House(self.home, self.cameras, weather=self.weather.snapshot,
+                                            history=self.db.weather_summary)
+        self.speaker.set_phrases(self.assistant.house.speech_phrases)
 
     def check(self):
         problems = []
@@ -553,450 +119,26 @@ class App:
         }
 
 
-class DashboardHandler(BaseHTTPRequestHandler):
+class DashboardHandler(httpcore.ResponseMixin, BaseHTTPRequestHandler):
+    """Routes live in routes/; response helpers in httpcore.ResponseMixin."""
     server_version = "TabletDashboard/" + VERSION
     sys_version = ""
     protocol_version = "HTTP/1.1"
     timeout = 20  # idle socket timeout per connection
 
-    @property
-    def app(self):
-        return self.server.app
-
-    # --- routing -----------------------------------------------------------
     def do_GET(self):
-        self._dispatch(head=False)
+        routes.dispatch(self, "GET")
 
     def do_HEAD(self):
-        self._dispatch(head=True)
-
-    def _method_not_allowed(self):
-        # The request body (if any) is never read, so the connection cannot be reused.
-        self.close_connection = True
-        self._send_bytes(405, b"Method not allowed\n", "text/plain; charset=utf-8",
-                         head=False, extra={"Allow": "GET, HEAD"})
-
-    do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _method_not_allowed
+        routes.dispatch(self, "HEAD")
 
     def do_POST(self):
-        path = urllib.parse.urlsplit(self.path).path
-        if path.startswith("/api/admin/"):
-            return self._do_admin(False, "POST")
-        if path == "/api/transcribe":
-            return self._do_transcribe()
-        if path == "/api/home/action":
-            return self._do_home_action()
-        if path == "/api/cameras/snapshot":
-            return self._do_camera_snapshot()
-        if path == "/api/cameras/control":
-            return self._do_camera_control()
-        if path != "/api/assistant":
-            return self._method_not_allowed()
-        # Always close after a POST: early rejections leave the body unread.
-        self.close_connection = True
-        a = self.app.assistant
-        cfg = a.cfg
-        if not assistant_mod.is_lan_client(self.client_address[0]):
-            return self._assistant_error(403, "forbidden", "The assistant is available on the local network only.")
-        problem = assistant_mod.check_origin(self.headers, cfg["allowed_hosts"])
-        if problem:
-            return self._assistant_error(403, "forbidden_origin", "Cross-origin requests are not allowed.")
-        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-        if ctype != "application/json":
-            return self._assistant_error(415, "unsupported_media_type", "Send application/json.")
-        if self.headers.get("Transfer-Encoding"):
-            return self._assistant_error(411, "length_required", "Chunked bodies are not accepted.")
-        length = self.headers.get("Content-Length", "")
-        if not length.isdigit():
-            return self._assistant_error(411, "length_required", "Content-Length is required.")
-        length = int(length)
-        if length == 0:
-            return self._assistant_error(400, "bad_request", "Empty request.")
-        if length > cfg["max_body_bytes"]:
-            return self._assistant_error(413, "too_large", "Request is too large.")
-        try:
-            raw = self.rfile.read(length)
-        except OSError:
-            return
-        if len(raw) != length:
-            return self._assistant_error(400, "bad_request", "Incomplete request.")
-        try:
-            question = assistant_mod.parse_question(raw, cfg)
-        except assistant_mod.RequestError as exc:
-            return self._assistant_error(exc.status, exc.code, exc.message)
-        status, body = a.ask(question)
-        extra = {}
-        retry = body.get("error", {}).get("retry_after") if not body.get("ok") else None
-        if retry:
-            extra["Retry-After"] = str(retry)
-        self._send_json(body, False, status=status, extra=extra)
+        routes.dispatch(self, "POST")
 
-    AUDIO_TYPES = ("video/mp4", "video/3gpp", "video/webm", "video/ogg", "application/ogg",
-                   "application/octet-stream")
+    def _method_not_allowed(self):
+        self.method_not_allowed()
 
-    def _do_transcribe(self):
-        """POST /api/transcribe: raw audio body (one recording) -> {"ok", "text", ...}."""
-        self.close_connection = True  # early rejections leave the body unread
-        v = self.app.voice
-        if not assistant_mod.is_lan_client(self.client_address[0]):
-            return self._assistant_error(403, "forbidden", "Voice input is available on the local network only.")
-        if assistant_mod.check_origin(self.headers, self.app.assistant.cfg["allowed_hosts"]):
-            return self._assistant_error(403, "forbidden_origin", "Cross-origin requests are not allowed.")
-        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-        if not (ctype.startswith("audio/") or ctype in self.AUDIO_TYPES):
-            return self._assistant_error(415, "unsupported_media_type", "Send an audio recording.")
-        if self.headers.get("Transfer-Encoding"):
-            return self._assistant_error(411, "length_required", "Chunked bodies are not accepted.")
-        length = self.headers.get("Content-Length", "")
-        if not length.isdigit():
-            return self._assistant_error(411, "length_required", "Content-Length is required.")
-        length = int(length)
-        if length == 0:
-            return self._assistant_error(400, "bad_request", "Empty recording.")
-        if length > v.cfg["max_upload_bytes"]:
-            return self._assistant_error(413, "too_large", "That recording is too large. Keep it under %d seconds."
-                                         % v.cfg["max_audio_seconds"])
-        try:
-            raw = self.rfile.read(length)
-        except OSError:
-            return
-        if len(raw) != length:
-            return self._assistant_error(400, "bad_request", "Incomplete upload.")
-        status, body = v.transcribe(raw)
-        extra = {}
-        retry = body.get("error", {}).get("retry_after") if not body.get("ok") else None
-        if retry:
-            extra["Retry-After"] = str(retry)
-        self._send_json(body, False, status=status, extra=extra)
-
-    def _read_lan_json(self, what):
-        """Checks for the small LAN-only JSON POST routes. Returns the body (a dict with a string
-        "id"), or None after sending an error response."""
-        self.close_connection = True  # early rejections leave the body unread
-        if not assistant_mod.is_lan_client(self.client_address[0]):
-            return self._assistant_error(403, "forbidden", "%s are available on the local network only." % what)
-        if assistant_mod.check_origin(self.headers, self.app.assistant.cfg["allowed_hosts"]):
-            return self._assistant_error(403, "forbidden_origin", "Cross-origin requests are not allowed.")
-        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-        if ctype != "application/json":
-            return self._assistant_error(415, "unsupported_media_type", "Send application/json.")
-        length = self.headers.get("Content-Length", "")
-        if self.headers.get("Transfer-Encoding") or not length.isdigit():
-            return self._assistant_error(411, "length_required", "Content-Length is required.")
-        if int(length) > 1024:
-            return self._assistant_error(413, "too_large", "Request is too large.")
-        try:
-            raw = self.rfile.read(int(length))
-        except OSError:
-            return None
-        try:
-            body = json.loads(raw.decode("utf-8"))
-        except ValueError:
-            body = None
-        if not isinstance(body, dict) or not isinstance(body.get("id"), str):
-            return self._assistant_error(400, "bad_request", "Send {\"id\": \"...\"}.")
-        return body
-
-    def _do_home_action(self):
-        """POST /api/home/action {"id": "<button id>"}: press one Home-tab button. LAN only."""
-        req = self._read_lan_json("Home controls")
-        if req is None:
-            return
-        try:
-            body = self.app.home.action(req["id"])
-        except home_mod.ActionError as exc:
-            return self._assistant_error(exc.code, "home_error", str(exc))
-        self._send_json(body, False)
-
-    def _do_camera_snapshot(self):
-        """POST /api/cameras/snapshot {"id": "<camera id>"}: ask one camera for a new picture. LAN only."""
-        req = self._read_lan_json("Cameras")
-        if req is None:
-            return
-        try:
-            body = self.app.cameras.request_snapshot(req["id"])
-        except home_mod.ActionError as exc:
-            return self._assistant_error(exc.code, "camera_error", str(exc))
-        self._send_json(body, False)
-
-    def _do_camera_control(self):
-        """POST /api/cameras/control {"id", "move": "left|right|up|down"} or {"id", "mode": "day|night|auto"}:
-        one pan/tilt step or a day/night change. LAN only."""
-        req = self._read_lan_json("Camera controls")
-        if req is None:
-            return
-        try:
-            if "move" in req:
-                body = self.app.cameras.move(req["id"], req["move"])
-            elif "mode" in req:
-                body = self.app.cameras.set_mode(req["id"], req["mode"])
-            else:
-                return self._assistant_error(400, "bad_request", "Send \"move\" or \"mode\".")
-        except home_mod.ActionError as exc:
-            return self._assistant_error(exc.code, "camera_error", str(exc))
-        self._send_json(body, False)
-
-    def _stream_live(self, cid, head, hd=False):
-        """MJPEG (multipart/x-mixed-replace) live view of an RTSP camera, for an <img>. LAN only."""
-        self.close_connection = True
-        try:
-            frames = self.app.cameras.live(cid, hd)
-            first = next(frames)
-        except home_mod.ActionError as exc:
-            return self._send_json({"error": str(exc)}, head, status=exc.code)
-        except StopIteration:
-            feed_error = self.app.cameras.live_error(cid, hd)
-            return self._send_json({"error": feed_error or "camera not answering"}, head, status=502)
-        try:
-            self.send_response(200)
-            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Connection", "close")
-            self._common_headers()
-            self.end_headers()
-            if head:
-                return
-            frame = first
-            while True:
-                self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n" % len(frame))
-                self.wfile.write(frame)
-                self.wfile.write(b"\r\n")
-                self.wfile.flush()
-                frame = next(frames, None)
-                if frame is None:
-                    return
-        except OSError:  # the viewer went away (or stalled past the socket timeout)
-            pass
-        finally:
-            frames.close()
-
-    def _admin_allowed(self):
-        """Admin is served only on the https listener and only to LAN clients."""
-        return getattr(self.server, "is_tls", False) and assistant_mod.is_lan_client(self.client_address[0])
-
-    def _do_admin(self, head, method):
-        parts = urllib.parse.urlsplit(self.path)
-        if method == "POST":
-            self.close_connection = True  # early rejections leave the body unread
-        if not self._admin_allowed() or not self.app.cfg["admin"]["enabled"]:
-            return self._send_json({"ok": False, "error": "not found"}, head, status=404)
-        body = b""
-        if method == "POST":
-            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-            length = self.headers.get("Content-Length", "")
-            if ctype != "application/json":
-                return self._send_json({"ok": False, "error": "Send application/json."}, False, status=415)
-            if self.headers.get("Transfer-Encoding") or not length.isdigit():
-                return self._send_json({"ok": False, "error": "Content-Length is required."}, False, status=411)
-            if int(length) > self.app.cfg["admin"]["max_body_bytes"]:
-                return self._send_json({"ok": False, "error": "Request is too large."}, False, status=413)
-            try:
-                body = self.rfile.read(int(length))
-            except OSError:
-                return
-        status, obj, extra = self.app.admin.handle(method, parts.path, parts.query, self.headers, body,
-                                                   self.client_address[0])
-        self._send_json(obj, head, status=status, extra=extra)
-
-    def _assistant_error(self, status, code, message):
-        self._send_json({"ok": False, "error": {"code": code, "message": message}}, False, status=status)
-
-    def _dispatch(self, head):
-        path = urllib.parse.urlsplit(self.path).path
-        if not path.startswith("/"):
-            return self._send_text(400, "Bad request", head)
-        if path == "/api/time":
-            return self._send_json(self.app.time_payload(), head)
-        if path == "/api/weather":
-            return self._send_json(self.app.weather.snapshot(), head)
-        if path == "/api/maps":
-            return self._send_json(self.app.maps.snapshot(), head)
-        if path == "/api/calendar":
-            # Personal data: local network only, like the assistant.
-            if not assistant_mod.is_lan_client(self.client_address[0]):
-                return self._send_json({"error": "forbidden"}, head, status=403)
-            return self._send_json(self.app.calendar.snapshot(), head)
-        if path == "/api/uptime":
-            # Names of home services: local network only.
-            if not assistant_mod.is_lan_client(self.client_address[0]):
-                return self._send_json({"error": "forbidden"}, head, status=403)
-            return self._send_json(self.app.health.public_snapshot(), head)
-        if path == "/api/home":
-            # Home controls: local network only.
-            if not assistant_mod.is_lan_client(self.client_address[0]):
-                return self._send_json({"error": "forbidden"}, head, status=403)
-            return self._send_json(self.app.home.status(), head)
-        if path == "/api/cameras" or path.startswith("/api/cameras/"):
-            # Pictures of the home: local network only.
-            if not assistant_mod.is_lan_client(self.client_address[0]):
-                return self._send_json({"error": "forbidden"}, head, status=403)
-            if path == "/api/cameras":
-                return self._send_json(self.app.cameras.snapshot(), head)
-            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-            m = re.match(r"^/api/cameras/([a-z0-9_-]{1,32})/live\.mjpg$", path)
-            if m:
-                return self._stream_live(m.group(1), head, query.get("q", [""])[0] == "hd")
-            m = re.match(r"^/api/cameras/([a-z0-9_-]{1,32})/controls$", path)
-            if m:
-                try:
-                    return self._send_json(self.app.cameras.controls(m.group(1)), head)
-                except home_mod.ActionError as exc:
-                    return self._send_json({"error": str(exc)}, head, status=exc.code)
-            m = re.match(r"^/api/cameras/([a-z0-9_-]{1,32})\.jpg$", path)
-            if not m:
-                return self._send_json({"error": "not found"}, head, status=404)
-            version = query.get("v", [""])[0][:40]
-            try:
-                data, ctype = self.app.cameras.image(m.group(1), version)
-            except home_mod.ActionError as exc:
-                return self._send_json({"error": str(exc)}, head, status=exc.code)
-            return self._send_bytes(200, data, ctype, head, {"Cache-Control": "private, max-age=300"})
-        if path == "/api/config":
-            return self._send_json(self.app.config_payload(), head)
-        if path == "/api/assistant/status":
-            return self._send_json(self.app.assistant.status(), head)
-        if path == "/api/voice/status":
-            return self._send_json(self.app.voice.status(), head)
-        if path.startswith("/api/admin/"):
-            return self._do_admin(head, "GET")
-        if path in ("/admin", "/admin/") or path.startswith("/admin."):
-            if not self._admin_allowed() or not self.app.cfg["admin"]["enabled"]:
-                port = self.app.cfg["https_port"]
-                return self._send_text(404, "Not found. The admin page is available on the local network at "
-                                       "https://<server>:%s/admin" % port if port else "Not found", head)
-            rel = "admin.html" if path in ("/admin", "/admin/") else path[1:]
-            full = resolve_under(self.app.web_root, rel)
-            ctype = STATIC_TYPES.get(os.path.splitext(full)[1].lower()) if full else None
-            if not ctype:
-                return self._send_text(404, "Not found", head)
-            return self._send_file(full, ctype, head, ranges=False)
-        if path.startswith("/api/"):
-            return self._send_json({"error": "not found"}, head, status=404)
-        if path.startswith("/maps/"):
-            full = self.app.maps.path_for(path[len("/maps/"):])
-            if not full:
-                return self._send_text(404, "Not found", head)
-            return self._send_file(full, "image/png", head, ranges=False)
-        if path.startswith("/media/"):
-            full = resolve_under(self.app.media_root, path[len("/media/"):])
-            ctype = MEDIA_TYPES.get(os.path.splitext(full)[1].lower()) if full else None
-            if not ctype:
-                return self._send_text(404, "Not found", head)
-            return self._send_file(full, ctype, head, ranges=True)
-        if path == "/":
-            return self._send_index(head)
-        if path.startswith("/m/"):
-            full = resolve_under(self.app.modern_root, path[len("/m/"):])
-            ctype = STATIC_TYPES.get(os.path.splitext(full)[1].lower()) if full else None
-            if not ctype:
-                return self._send_text(404, "Not found", head)
-            return self._send_file(full, ctype, head, ranges=False)
-        full = resolve_under(self.app.web_root, path[1:])
-        ctype = STATIC_TYPES.get(os.path.splitext(full)[1].lower()) if full else None
-        if not ctype:
-            return self._send_text(404, "Not found", head)
-        return self._send_file(full, ctype, head, ranges=False)
-
-    def _send_index(self, head):
-        """Classic page for old browsers (the tablet), modern page for phones and PCs."""
-        ui, cookie = uidetect.choose_ui(self.headers.get("User-Agent", ""),
-                                        urllib.parse.urlsplit(self.path).query,
-                                        self.headers.get("Cookie", ""),
-                                        self.app.cfg["ui"]["modern_enabled"])
-        root = self.app.modern_root if ui == uidetect.MODERN else self.app.web_root
-        extra = {"Vary": "User-Agent, Cookie"}
-        if cookie:
-            extra["Set-Cookie"] = cookie
-        return self._send_file(os.path.join(root, "index.html"), STATIC_TYPES[".html"], head,
-                               ranges=False, extra=extra)
-
-    # --- responses ---------------------------------------------------------
-    def _common_headers(self):
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Referrer-Policy", "no-referrer")
-
-    def _send_bytes(self, status, body, ctype, head, extra=None):
-        self.send_response(status)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        self._common_headers()
-        if self.close_connection:
-            self.send_header("Connection", "close")
-        for key, value in (extra or {}).items():
-            self.send_header(key, value)
-        self.end_headers()
-        if not head:
-            self.wfile.write(body)
-
-    def _send_text(self, status, text, head):
-        self._send_bytes(status, (text + "\n").encode("utf-8"), "text/plain; charset=utf-8",
-                         head, {"Cache-Control": "no-store"})
-
-    def _send_json(self, obj, head, status=200, extra=None):
-        body = json.dumps(obj, separators=(",", ":")).encode("utf-8")
-        headers = {
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-            "Expires": "0",
-        }
-        headers.update(extra or {})
-        self._send_bytes(status, body, "application/json; charset=utf-8", head, headers)
-
-    def _send_file(self, full, ctype, head, ranges, extra=None):
-        try:
-            f = open(full, "rb")
-        except OSError:
-            return self._send_text(404, "Not found", head)
-        with f:
-            st = os.fstat(f.fileno())
-            size = st.st_size
-            span = parse_range(self.headers.get("Range"), size) if ranges else None
-            if span == "unsatisfiable":
-                return self._send_bytes(416, b"", "text/plain", head,
-                                        {"Content-Range": "bytes */%d" % size, "Accept-Ranges": "bytes"})
-            start, end = span if span else (0, size - 1)
-            length = end - start + 1 if size else 0
-            self.send_response(206 if span else 200)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(length))
-            self.send_header("Last-Modified", email.utils.formatdate(st.st_mtime, usegmt=True))
-            self._common_headers()
-            if ranges:
-                self.send_header("Accept-Ranges", "bytes")
-                if span:
-                    self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
-            else:
-                self.send_header("Cache-Control", "no-cache")
-            if ctype.startswith("text/html"):
-                self.send_header("Content-Security-Policy", CSP)
-                self.send_header("X-Frame-Options", "DENY")
-            for key, value in (extra or {}).items():
-                self.send_header(key, value)
-            self.end_headers()
-            if head:
-                return
-            f.seek(start)
-            remaining = length
-            try:
-                while remaining > 0:
-                    chunk = f.read(min(65536, remaining))
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-                    remaining -= len(chunk)
-            except (BrokenPipeError, ConnectionResetError):
-                self.close_connection = True
-
-    # --- logging -----------------------------------------------------------
-    def log_request(self, code="-", size="-"):
-        # Routine successful API polls would dominate the log; record everything else.
-        path = getattr(self, "path", "")
-        if path.startswith("/api/") and isinstance(code, int) and code < 400:
-            return
-        super().log_request(code, size)
-
-    def log_message(self, fmt, *args):
-        log.info("%s %s", self.address_string(), fmt % args)
+    do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _method_not_allowed
 
 
 class DashboardServer(ThreadingHTTPServer):
@@ -1088,8 +230,10 @@ def main(argv=None):
     signal.signal(signal.SIGTERM, _shutdown)
     app.weather.start()
     app.maps.start()
+    app.cameras.start_ai_refresh()
     app.calendar.start()
     app.health.start()
+    app.speaker.start_bank()
     if httpsd:
         threading.Thread(target=httpsd.serve_forever, name="https", daemon=True).start()
         log.info("dashboard https listening on %s:%d", cfg["bind"], cfg["https_port"])
