@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import gcal as gcal_mod
+import gcal_auth
 
 from .core import ApiError, log
 
@@ -65,7 +66,7 @@ class CalendarOAuthMixin:
         if not isinstance(hint, str) or len(hint) > 200 or (hint and not re.match(r"^[^\s@]+@[^\s@]+$", hint)):
             raise ApiError(400, "The account hint must be an email address.")
         state = secrets.token_urlsafe(24)
-        verifier, challenge = gcal_mod.pkce_pair()
+        verifier, challenge = gcal_auth.pkce_pair()
         admin = self
 
         class Catch(BaseHTTPRequestHandler):
@@ -90,7 +91,7 @@ class CalendarOAuthMixin:
                 self._stop_oauth_server(self._oauth)
             self._oauth = {"state": state, "verifier": verifier, "redirect_uri": redirect_uri, "srv": srv,
                            "client": client, "expires": time.time() + 600, "result": None, "message": None,
-                           "auth_url": gcal_mod.build_auth_url(client[0], redirect_uri, state, challenge, hint)}
+                           "auth_url": gcal_auth.build_auth_url(client[0], redirect_uri, state, challenge, hint)}
             return {"ok": True, "pending": self._oauth_public()}
 
     def _finish_oauth(self, text, from_loopback=False):
@@ -101,8 +102,8 @@ class CalendarOAuthMixin:
                 return "No sign-in is waiting. Start again from the admin page."
             o["result"] = "working"
         try:
-            code = gcal_mod.parse_redirect(text, o["state"])
-            refresh = gcal_mod.exchange_code(o["client"], code, o["verifier"], o["redirect_uri"])
+            code = gcal_auth.parse_redirect(text, o["state"])
+            refresh = gcal_auth.exchange_code(o["client"], code, o["verifier"], o["redirect_uri"])
             gcal_mod.write_private(self.app.calendar.token_path, json.dumps({
                 "refresh_token": refresh, "scope": gcal_mod.SCOPE,
                 "created": datetime.now().astimezone().isoformat(timespec="seconds")}) + "\n")

@@ -10,7 +10,7 @@ import threading
 import time
 import urllib.parse
 
-import assistant as assistant_mod
+import httpcore
 import netsim
 
 from .core import (ApiError, _clean_err, COOKIE, load_password, log, LOGIN_MAX_FAILURES, LOGIN_WINDOW,
@@ -57,7 +57,7 @@ class AdminService(KeysMixin, CalendarOAuthMixin, AIMixin, SettingsMixin, OpsMix
         try:
             route = path[len("/api/admin/"):]
             if method == "POST":
-                problem = assistant_mod.check_origin(headers, self.app.cfg["assistant"]["allowed_hosts"])
+                problem = httpcore.check_origin(headers, self.app.cfg["assistant"]["allowed_hosts"])
                 if problem or headers.get("X-Admin") != "1":
                     raise ApiError(403, "Cross-origin or scripted requests are not allowed.")
                 try:

@@ -13,6 +13,8 @@ import cameras as cameras_mod
 import gcal as gcal_mod
 import health as health_mod
 import home as home_mod
+import laundry as laundry_mod
+import away as away_mod
 import localai as localai_mod
 import maps as maps_mod
 import pgstore as pgstore_mod
@@ -59,6 +61,8 @@ DEFAULT_CONFIG = {
     "admin": dict(admin_mod.DEFAULT_ADMIN_CONFIG),
     "home": dict(home_mod.DEFAULT_HOME_CONFIG),
     "cameras": dict(cameras_mod.DEFAULT_CAMERAS_CONFIG),
+    "laundry": json.loads(json.dumps(laundry_mod.DEFAULT_LAUNDRY_CONFIG)),
+    "away": json.loads(json.dumps(away_mod.DEFAULT_AWAY_CONFIG)),
     "database": dict(pgstore_mod.DEFAULT_DATABASE_CONFIG),
 }
 
@@ -166,6 +170,8 @@ def validate_config(cfg):
         admin_mod.validate_admin_config(cfg["admin"])
         home_mod.validate_home_config(cfg["home"])
         cameras_mod.validate_cameras_config(cfg["cameras"])
+        laundry_mod.validate_laundry_config(cfg["laundry"])
+        away_mod.validate_away_config(cfg["away"])
         pgstore_mod.validate_database_config(cfg["database"])
     except (ValueError, KeyError, TypeError) as exc:
         raise ConfigError(str(exc))

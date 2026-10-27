@@ -2,7 +2,7 @@
 
 The browser admin page for the tablet dashboard, introduced in **0.9.0**. This doc covers its internals: modules, security model, API, config sections and extension points. For how to use it, see the [README](../README.md#admin-page). For the offline test switch's effect on the fallback, see [LOCAL-FALLBACK-ARCHITECTURE.md](LOCAL-FALLBACK-ARCHITECTURE.md#8-testing).
 
-- URL: `https://<server>:8443/admin`, LAN only.
+- URL: `https://<server>:8443/admin`, LAN only (`assistant.trusted_ips` does not apply; Tailscale devices can't open it).
 - First run: `scripts/set-admin-password.sh` on the server.
 
 ---
@@ -15,7 +15,7 @@ The browser admin page for the tablet dashboard, introduced in **0.9.0**. This d
 | `health.py` | `HealthChecker` (background thread, history ring buffers), TCP/HTTP checks, `KumaClient` (status page, `/metrics`, push). |
 | `localai.py` | `LocalAI`: lists model files and builds under `local-ai/`, RAM guard, start/stop via the scripts, direct test calls. CLI: `python3 localai.py env`, which `scripts/local-ai-start.sh` reads. |
 | `netsim.py` | `OfflineSim`: the offline test switch (`data/offline-test.json`). CLI: `scripts/offline-test.sh`. |
-| `envfile.py` | Reads and writes `.env` (mode 600, atomic, name and value checks). `gcal.py` keeps thin aliases to it. |
+| `envfile.py` | Reads and writes `.env` (mode 600, atomic, name and value checks) and loads API keys (`load_api_key`). `gcal.py` keeps thin aliases to it. |
 | `web/admin.{html,js,css}` | The page. Plain JS, no inline script or style (strict CSP), and no tablet ES5 limits. |
 
 `App` in `server.py` builds `localai`, `admin` and `health` next to the other services. `routes/admin_api.py` checks https + LAN and the body limits, then calls `AdminService.handle()`, which finds the endpoint by name (`api_<method>_<route>`) on the class or one of its mixins. `main()` calls `netsim.install(...)` and starts and stops the health thread.
@@ -130,7 +130,7 @@ Example targets: a media server (`tcp`, port 32400), a file share (`tcp`, port 4
 | `tests/test_health.py` | 16 | Kuma metrics and status-page parsers and clients (fixtures), push, config validation, TCP and HTTP checks, checker history, a failing built-in check is reported rather than raised; `localai`: model inventory, the path guard, the RAM guard, env lines |
 | `tests/test_netsim.py` | 11 | expiry, parsing, instant and realistic modes, gate reset |
 
-Run all of them with `python3 -m unittest discover -s tests`: 327 tests at 0.25.1 (269 at 0.21.2, 247 at 0.18.0, 182 at 0.9.0).
+Run all of them with `python3 -m unittest discover -s tests`: 386 tests at 0.30.1 (327 at 0.25.1, 269 at 0.21.2, 247 at 0.18.0, 182 at 0.9.0).
 
 ## 7. Not done yet
 

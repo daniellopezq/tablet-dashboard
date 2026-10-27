@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cameras  # noqa: E402
 import home  # noqa: E402
+import livefeed  # noqa: E402
 from test_home import TOKEN, FakeClock, FakeSystem  # noqa: E402
 
 JPEG = b"\xff\xd8\xff\xe0fake-jpeg"
@@ -219,6 +220,15 @@ class CameraTests(CamerasTestCase):
         self.tick(61)
         self.cams.request_snapshot("door")
 
+    def test_background_snapshot_logs_at_debug(self):
+        # The minute-by-minute background refresh must not fill the INFO log; a person's request still shows.
+        with self.assertLogs("dashboard", "DEBUG") as logs:
+            self.cams.request_snapshot("door", background=True)
+            self.tick(61)
+            self.cams.request_snapshot("door")
+        self.assertEqual([r.levelname for r in logs.records if "snapshot requested" in r.getMessage()],
+                         ["DEBUG", "INFO"])
+
     def test_no_token(self):
         os.remove(os.path.join(self.tmp, ".env"))
         snap = self.cams.snapshot()
@@ -312,8 +322,8 @@ class RtspTests(unittest.TestCase):
         self.assertIn("-timeout", cmd)  # ffmpeg 5+ spelling (the fake says 6.1)
 
     def test_rtsp_timeout_flag_by_version(self):
-        self.assertEqual(cameras.rtsp_timeout_flag(self.cfg["ffmpeg_path"]), "-timeout")
-        self.assertEqual(cameras.rtsp_timeout_flag("/nonexistent/ffmpeg"), "-stimeout")
+        self.assertEqual(livefeed.rtsp_timeout_flag(self.cfg["ffmpeg_path"]), "-timeout")
+        self.assertEqual(livefeed.rtsp_timeout_flag("/nonexistent/ffmpeg"), "-stimeout")
 
     def test_snapshot_without_home_assistant(self):
         snap = self.cams.snapshot()
@@ -354,7 +364,7 @@ class RtspTests(unittest.TestCase):
         self.assertEqual(self.feed._viewers, 0)
 
     def test_viewer_limit(self):
-        gens = [self.cams.live("v380") for _ in range(cameras.MAX_VIEWERS)]
+        gens = [self.cams.live("v380") for _ in range(livefeed.MAX_VIEWERS)]
         for g in gens:
             next(g)
         extra = self.cams.live("v380")
@@ -604,7 +614,7 @@ class BlinkLiveTests(unittest.TestCase):
         self.assertNotIn("127.0.0.1", self.feed._explain("http://127.0.0.1:8088/x: Something odd"))
         rtsp = self.cams._feeds.get("v380")
         self.assertIsNone(rtsp)  # only Blink feeds here; RTSP messages pass through unchanged:
-        plain = cameras.LiveFeed(dict(RTSP_CAM), self.cfg)
+        plain = livefeed.LiveFeed(dict(RTSP_CAM), self.cfg)
         self.assertEqual(plain._explain("rtsp://x: Connection refused"), "rtsp://x: Connection refused")
 
     def test_live_on_demand(self):

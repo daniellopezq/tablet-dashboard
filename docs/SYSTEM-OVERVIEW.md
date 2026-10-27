@@ -27,7 +27,7 @@ Give a drawer tablet a second life as a useful wall/desk display that:
 | Browser | Chrome 50 (2016) | n/a |
 | Other duties | none | Plex, Jellyfin, Docker, Samba, qBittorrent, NoMachine |
 
-Phones and PCs on the home network are extra clients. They get the modern view (section 4) and need no setup beyond the address.
+Phones and PCs on the home network are extra clients. They get the modern view (section 4) and need no setup beyond the address. Since 0.28.0, your own Tailscale devices listed by exact address in `assistant.trusted_ips` count as home network too (not for the admin page).
 
 ## 3. Features
 
@@ -164,8 +164,8 @@ flowchart LR
 
 - **Working:** every section on the old tablet (clock, weather, maps, Home, Cameras with RTSP live view and ONVIF controls, Calendar, Uptime, Ask, one-tap Voice over https), the modern view for phones and PCs, the local AI fallback, the admin page, and autostart with crash recovery.
 - **Ask the house (0.22.0–0.25.0):** home commands and questions, camera questions and spoken answers (Piper, or Google Cloud TTS with Piper as the fallback, plus a saved phrase bank for fixed replies). Tested with mocks and in headless Chrome; spoken answers on the tablet's Chrome 50 still need checking on the device.
-- **Code layout (0.21.3):** `server.py` and `admin.py` were split into modules (`config.py`, `weather.py`, `httpcore.py`, `routes/`, `admin/`) with no behaviour change, checked by a route-by-route golden test.
-- **Tests:** 327 automated tests, run by GitHub Actions on every push.
+- **Code layout (0.21.3, 0.30.1):** `server.py` and `admin.py` were split into modules (`config.py`, `weather.py`, `httpcore.py`, `routes/`, `admin/`) with no behaviour change, checked by a route-by-route golden test. 0.30.1 split `assistant.py` (`usage.py`, `upstream.py`, `util.py`, key loading into `envfile.py`, the LAN/origin checks into `httpcore.py`), `gcal.py` (`gcal_auth.py`), `cameras.py` (`livefeed.py`) and the tablet's `web/app.js` (`web/js/`, one ES5 file per tab).
+- **Tests:** 386 automated tests, run by GitHub Actions on every push.
 - **Not yet measured or verified:** the fallback under a media-server stream, real tablet microphone recordings in noisy rooms, the modern view on a range of real phones, and a full reboot cycle with autostart.
 - **Planned:** sound for RTSP live view (the camera's audio as a separate stream), recording RTSP cameras to disk, kiosk mode, admin alerts (ntfy or email), and an authenticated way to reach the dashboard from outside the LAN.
 - **If you use Google Calendar:** while your Google Cloud app is in Testing, the sign-in expires every 7 days. Publish the app ("In production"; unverified is fine for personal use), or reconnect from the admin page.

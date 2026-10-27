@@ -1,8 +1,9 @@
 import { h, icon, replace, card, message, toast, confirmDialog } from '../lib/dom.js';
 import { subscribe, patch, refreshSoon } from '../lib/store.js';
 import { postJSON } from '../lib/api.js';
+import { formatHM } from '../lib/clock.js';
 
-const ICONS = new Set(['media', 'fan', 'plug', 'light', 'home', 'shield', 'motion']);
+const ICONS = new Set(['media', 'fan', 'plug', 'light', 'home', 'shield', 'motion', 'garage']);
 const MEDIA = { plex: 'Plex', jellyfin: 'Jellyfin' };
 const busy = new Set();  // button ids waiting for the server
 
@@ -31,10 +32,11 @@ function describe(b) {
     if (m.error) { d.hint = m.error; d.cls += ' err'; }
     return d;
   }
+  if (b.kind === 'sensor') return describeSensor(b);
   const st = b.state;
   if (st === undefined) return { name: b.label, word: 'Run', cls: 'off', hint: 'Tap to run' };
   if (st === null) return { name: b.label, word: '?', cls: 'unk', hint: 'Home Assistant not connected' };
-  if (st === 'on') return { name: b.label, word: 'On', cls: 'on', hint: 'Tap to turn off' };
+  if (st === 'on') return { name: b.label, word: 'On', cls: 'on', hint: b.hint || 'Tap to turn off' };
   if (st.startsWith('armed_')) return { name: b.label, word: 'Armed', cls: 'on', hint: 'Tap to disarm' };
   if (st === 'disarmed') return { name: b.label, word: 'Off', cls: 'off', hint: 'Disarmed · tap to arm' };
   if (st === 'arming' || st === 'pending') return { name: b.label, word: 'Arming', cls: 'busy', hint: 'Please wait' };
@@ -44,6 +46,19 @@ function describe(b) {
     return { name: b.label, word: 'N/A', cls: 'unk', hint: st === 'missing' ? 'Not found in Home Assistant' : 'Device not responding' };
   }
   return { name: b.label, word: String(st), cls: 'off', hint: '' };
+}
+
+/** Read-only tile (kind "sensor", e.g. the garage): its words, since when, amber once it warns. */
+function describeSensor(b) {
+  const st = b.state;
+  const w = b.words ?? { on: 'On', off: 'Off' };
+  if (st === null) return { name: b.label, word: '?', cls: 'unk', hint: 'Home Assistant not connected' };
+  if (!['on', 'off', 'open', 'closed'].includes(st)) {
+    return { name: b.label, word: 'N/A', cls: 'unk', hint: st === 'missing' ? 'Not found in Home Assistant' : 'Unknown' };
+  }
+  const on = st === 'on' || st === 'open';
+  return { name: b.label, word: on ? w.on : w.off, cls: b.warn ? 'warn' : on ? 'on' : 'off',
+    hint: b.since_ms ? `Since ${formatHM(b.since_ms)}` : '' };
 }
 
 function question(b) {
@@ -63,6 +78,7 @@ function question(b) {
 
 async function press(b) {
   if (busy.has(b.id)) return;
+  if (b.kind === 'sensor') { toast(`${b.label} only shows its state`); return; }
   if (b.kind === 'media_switch' && b.media?.switching) { toast('Already switching, please wait'); return; }
   if (b.confirm && !(await confirmDialog(question(b)))) return;
   busy.add(b.id);
@@ -114,7 +130,7 @@ function summary(d, err) {
     parts.push(m.switching ? 'Switching media server' : MEDIA[m.current] ? `${MEDIA[m.current]} running`
       : m.current === 'both' ? 'Plex + Jellyfin both running' : 'No media server');
   }
-  const on = d.buttons.filter((b) => b.state === 'on').length;
+  const on = d.buttons.filter((b) => b.state === 'on' && b.kind !== 'sensor').length;
   if (d.ha_ok === false) parts.push(d.ha_error || 'Home Assistant not connected');
   else if (on) parts.push(`${on} on`);
   if (err) parts.push('offline, showing last data');
@@ -128,6 +144,26 @@ function mountInto(root, wrap, compact) {
     const p = problem(d, err);
     if (p) return replace(body, p);
     replace(body, h('div', { class: `hc-grid ${compact ? 'compact' : ''}` }, d.buttons.map((b) => tile(b, compact))), summary(d, err));
+  });
+}
+
+/**
+ * Banner on every screen while a read-only tile warns (garage left open), until dismissed. Keeps the home
+ * feed polled in the background, which is cheap: the server caches Home Assistant's states.
+ */
+export function watchHome(bannerEl) {
+  let seen = '';
+  return subscribe('home', (d) => {
+    const b = d?.buttons?.find((x) => x.warn);
+    if (!b) { bannerEl.hidden = true; return; }
+    const key = `${b.id}:${b.since_ms}`;
+    if (key === seen) return;
+    const close = () => { seen = key; bannerEl.hidden = true; };
+    replace(bannerEl,
+      h('span', null, `${b.label}: ${(b.words?.on ?? 'On').toLowerCase()} since ${formatHM(b.since_ms)} (over ${b.warn_minutes} min)`),
+      h('a', { class: 'btn btn-small', href: '#home', onclick: close }, 'View'),
+      h('button', { type: 'button', class: 'btn-plain', 'aria-label': 'Dismiss', onclick: close }, '✕'));
+    bannerEl.hidden = false;
   });
 }
 

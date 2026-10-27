@@ -43,6 +43,9 @@ Phones and PCs get the modern view at the same address:
 - **Uptime:** Uptime Kuma and configured TCP/HTTP health monitors, with status, response times and a short history.
 - **Home:** large Home Assistant tiles for lights, plugs, scripts and configured alarm actions, with current device state; optional Plex/Jellyfin switch.
 - **Cameras:** Home Assistant camera snapshots and motion pop-ups (e.g. Blink), plus RTSP-to-MJPEG live viewing of local cameras (e.g. V380) through an on-demand FFmpeg process.
+- **Automations:** a laundry check (rain coming → a pan/tilt camera looks at the clotheslines and warns if laundry is
+  out) and an away mode (random, human-paced lights from sunset to a random bedtime). Read-only tiles can show any Home
+  Assistant state, with a warning when it stays on too long (e.g. a garage door left open).
 - **Modern view for phones and PCs:** the same address gives newer browsers a responsive page with every section: an
   Overview grid on a PC, a tab bar on a phone, light and dark themes, and one-tap voice. The old tablet keeps its
   lightweight page. The server picks the page from the browser's User-Agent.
@@ -91,7 +94,9 @@ Open `http://<server-ip>:8099/` on the tablet. Stop the server with `scripts/sto
 `deploy/systemd/` (`tablet-dashboard`, restarted 5 s after a crash, and `tablet-local-ai` for the optional local models)
 and turns on lingering so they start at boot without a login. Use `--no-local-ai` to skip the models and `--remove` to go
 back to manual start/stop. With the units installed, `start.sh` and `stop.sh` call `systemctl --user`. Status and logs:
-`systemctl --user status tablet-dashboard`, `journalctl --user -u tablet-dashboard`.
+`systemctl --user status tablet-dashboard`, `journalctl --user -u tablet-dashboard`. Since 0.29.0 it also installs the
+`tablet-logrotate` timer: daily, it rotates `logs/*.log` with `deploy/logrotate/tablet-dashboard.conf` (weekly or at
+20 MB, 8 compressed copies, `copytruncate`), with no root needed.
 
 Optional features need extra setup and stay disabled or show a "not set up" message until you do it:
 
@@ -107,6 +112,8 @@ Optional features need extra setup and stay disabled or show a "not set up" mess
 | Uptime Kuma | A Kuma instance; `base_url` plus a status page slug, or `KUMA_API` in `.env` |
 | Home Assistant | A running Home Assistant instance, its `ha_url`, configured `home.buttons`, and `HA_TOKEN` stored in `.env` |
 | Cameras | `cameras.list`; HA camera entities for snapshots, or local RTSP feeds and FFmpeg for live view; see the camera section |
+| Away mode | Home Assistant lights listed under `away.lights`, and HA's `sun.sun` |
+| Laundry check | An RTSP camera with ONVIF pan/tilt, a recorded movement recipe and reference pictures per clothesline (`laundry.lines`) |
 
 ## Layout
 
@@ -114,10 +121,13 @@ Optional features need extra setup and stay disabled or show a "not set up" mess
 |---|---|
 | `server.py` | Entry point: builds the services (`App`), runs the http and https listeners, holds `VERSION` |
 | `config.py` | Config defaults, `config.json` loading and validation (each feature module validates its own section) |
-| `httpcore.py` | HTTP helpers: content types, CSP, safe path resolution, Range requests, `send_json`/`send_file` |
+| `httpcore.py` | HTTP helpers: content types, CSP, safe path resolution, Range requests, `send_json`/`send_file`, the LAN and same-origin checks |
 | `routes/` | URL routing: the route table in `routes/__init__.py` (with a LAN-only flag per route), handlers in `public.py`, `ai.py`, `devices.py`, `files.py`, `admin_api.py` |
 | `weather.py` | Open-Meteo weather: background fetcher and cache |
-| `assistant.py` | AI assistant: key loading, usage limits, Vercel AI Gateway call, local fallback for Ask |
+| `assistant.py` | AI assistant: request parsing, Vercel AI Gateway call, local fallback, house answers for Ask |
+| `usage.py` | Usage limits for Ask and Voice (min interval, per hour, per day), persisted with a lock |
+| `upstream.py` | Cloud calls: no redirects, bounded size and time, safe error categories |
+| `util.py` | Tiny shared helpers (`num`, `now_ms`) |
 | `voice.py` | Voice input: upload checks, ffmpeg conversion, Groq Whisper transcription, local fallback for Voice |
 | `homeai.py` | "Ask the house": matcher for simple home commands, the house block for the model, actions with server-side confirmation, camera pictures |
 | `tts.py` | Spoken answers: engine choice (Google or Piper), language pick (es/en), in-memory WAV cache, saved phrase bank |
@@ -125,18 +135,22 @@ Optional features need extra setup and stay disabled or show a "not set up" mess
 | `pgstore.py` | Optional history in a local PostgreSQL through `psql` (peer login): weather readings today |
 | `fallback.py` | Local-fallback mechanism shared by Ask and Voice: header deadline, cooldown gate, local lock, plain-text cleaner |
 | `maps.py` | Weather maps: OpenWeatherMap and OpenStreetMap tiles, rate limiting, Pillow compositing |
-| `gcal.py` | Google Calendar: background fetcher, plus the `auth`, `status`, `test` and `revoke` commands |
+| `gcal.py` | Google Calendar: background fetcher and cache (`python3 gcal.py auth|status|test|revoke` still works) |
+| `gcal_auth.py` | Google Calendar sign-in (OAuth with PKCE, used by the admin page) and the command line |
 | `admin/` | Admin page backend: password sign-in, API keys, Calendar sign-in, settings, AI models, offline test, logs, maintenance (one mixin per page; CLI `python3 -m admin set-password`) |
 | `health.py` | Health checks and the optional Uptime Kuma client (status page, `/metrics`, push heartbeat) |
 | `localai.py` | Local model inventory, choice (`local_ai` in config) and start/stop for the admin page |
 | `netsim.py` | Offline test switch (simulated internet outage inside the dashboard only) |
-| `home.py` | Home Assistant controls, rate limits, current device states and optional Plex/Jellyfin switch |
-| `cameras.py` | Home Assistant snapshots/motion and on-demand FFmpeg RTSP-to-MJPEG live feeds |
-| `envfile.py` | Owner-only file helpers for `.env` and other private files |
+| `home.py` | Home Assistant controls (switch, two-service, read-only sensor), rate limits, current device states and optional Plex/Jellyfin switch |
+| `cameras.py` | Home Assistant snapshots/motion, RTSP cameras, background snapshots, pan/tilt and day/night through `onvif.py` |
+| `livefeed.py` | Live MJPEG for one camera stream: an on-demand FFmpeg and its latest frame |
+| `laundry.py` | Laundry check: rain coming → the pan/tilt camera looks at the clotheslines |
+| `away.py` | Away mode: random, human-paced lights from sunset to a random bedtime |
+| `envfile.py` | Owner-only file helpers for `.env` and other private files, and API key loading |
 | `config.example.json` | Example settings; copy to `config.json` (gitignored) |
 | `.env` | **Private** API keys (mode 600; never served, gitignored) |
 | `uidetect.py` | Picks the classic or modern page for `/` (User-Agent, `?ui=`, `ui` cookie) |
-| `web/` | Classic tablet page (ES5) and static files; its icons are shared with the modern view |
+| `web/` | Classic tablet page and static files; its icons are shared with the modern view. `web/js/` is the ES5 client: one file per tab plus `core.js` (loaded first) and `main.js` (startup, last), sharing globals |
 | `web-modern/` | Modern view for phones and PCs (ES modules, no build step), served under `/m/` |
 | `media/` | Optional; the only directory served under `/media/` (mp4, m4v, webm) |
 | `data/`, `logs/`, `run/` | Runtime state, log and PID file (created automatically, gitignored) |
@@ -201,9 +215,10 @@ variables with the same names take priority over the file.
 | `/api/weather` | Cached weather plus status (`unconfigured`, `loading`, `error`, `ok`) and a `stale` flag. Never contacts Open-Meteo during the request. |
 | `/api/calendar` | Cached agenda grouped by day, plus status. LAN clients only. |
 | `/api/uptime` | Uptime Kuma monitors, then the `health.targets` services: names, states, ping, uptime % and recent history only (no hosts or URLs). LAN clients only. |
-| `/api/home` | Home tab buttons with live state (HA entity states, which media server runs, whether a switch is in progress). LAN clients only. |
+| `/api/home` | Home tab buttons with live state (HA entity states, which media server runs, whether a switch is in progress; for read-only tiles also `since_ms` and `warn`). LAN clients only. |
 | `POST /api/home/action` | Press one button (`{"id": "..."}`). Same-origin, LAN clients only, 2 s debounce per button. |
-| `/api/cameras` | Camera list (label, availability, image version and time, motion, battery, live) and the current motion `alert`. LAN clients only. |
+| `/api/cameras` | Camera list (label, availability, image version and time, motion, battery, live), the current motion `alert`, and the laundry check's status (`laundry`: lines, last result, warning). LAN clients only. |
+| `POST /api/laundry/check` | Look at the clotheslines now, whatever the weather (`{}`). 409 while a check runs. Same-origin, LAN only. |
 | `/api/cameras/<id>.jpg?v=<version>` | Latest still of one camera (from HA by the server, so the token never reaches the tablet, or from the RTSP feed). LAN clients only. |
 | `/api/cameras/<id>/live.mjpg` | Live view of an RTSP camera as MJPEG (`multipart/x-mixed-replace`) for an `<img>`; ends after `live_max_seconds`. At most 4 viewers per camera. LAN clients only. |
 | `/api/cameras/<id>/live.mjpg?q=hd` | The same from the camera's HD stream (`rtsp_url_hd`), if it has one. |
@@ -246,7 +261,10 @@ runs `fallback.js`; if `app.js` fails to load, `boot.js` catches that. `/index.h
 
 Every section is available. Cameras have their own pages (`#cameras/<id>`): live MJPEG for RTSP cameras, **New
 snapshot** for Home Assistant ones. A motion alert shows a banner with a **View** link instead of jumping to the camera
-the way the tablet does. Home buttons ask for confirmation exactly like the tablet.
+the way the tablet does. Home buttons ask for confirmation exactly like the tablet. Since 0.29.0 the Cameras page has a
+**Clotheslines** panel (last result per line, **Check now**), a laundry warning or a read-only tile's warning shows as an
+amber banner on every screen until dismissed, and Weather (plus its Overview card) shows the rain chance for the next
+12 hours.
 
 Voice uses `MediaRecorder` and stops by itself after a pause, with the same thresholds as the tablet. Browsers only
 allow the microphone on secure pages, so use the https address (`https://<server>:<https_port>/`). On plain http,
@@ -518,6 +536,24 @@ Optional; bring your own [Home Assistant](https://www.home-assistant.io/). One l
 - **`media_switch`** (optional, advanced) runs exactly one of Plex or Jellyfin. It calls your own root-owned
   `/usr/local/sbin/media-switch <plex|jellyfin>` through `sudo -n`, so you need to write that script and a sudoers rule
   allowing only it for the dashboard's user. Leave it out of `home.buttons` if you don't want it.
+- **`away`**: the away mode switch (see "Away mode").
+- **`sensor`** (0.30.0): a read-only tile for `state_entity`. Optional `words` (`{"on": "Open", "off": "Closed"}`) for the
+  tile, `words_es` for the assistant's answers, and `warn_minutes`: once it has been on that long the tile turns amber and
+  a banner shows on every tab (tablet and modern view) until tapped. A tap only says it's read-only, and the assistant can
+  report it but never switch it.
+
+**Example: a garage door from phone notifications.** Some garage openers (MyQ, for one) no longer allow third-party
+integrations, but their phone app still sends "opened"/"closed" notifications. The Home Assistant Android app can report
+them: turn on its "Last notification" sensor and set its allow list to the opener's app only. An HA automation then turns
+an `input_boolean` on or off from the notification (MyQ's has a `notificationType` attribute, `Open` or `Closed`), a
+second one can notify you after a while, and a `sensor` tile shows the helper:
+
+```json
+{"id": "garage", "label": "Garage", "kind": "sensor", "icon": "garage", "state_entity": "input_boolean.garage_open",
+ "words": {"on": "Open", "off": "Closed"}, "warn_minutes": 15}
+```
+
+It depends on the phone being on and online; a missed notification leaves the tile wrong until the next open or close.
 
 Devices with local control work without the internet; cloud integrations don't.
 
@@ -588,6 +624,37 @@ on loopback only), set the same `BLINK_PROXY_TOKEN` there and in this project's 
 
 **Tests:** `python3 -m unittest tests.test_cameras tests.test_onvif` (mock HA; a mock ONVIF camera; a fake FFmpeg process for RTSP cameras). These tests do not establish compatibility or resource use with a physical camera and the original tablet.
 
+## Away mode (0.27.0)
+
+An `away` Home button (or the voice command "activa el modo fuera") turns it on. After sunset (HA's `sun.sun`), the
+lights listed under `away.lights` follow a new random plan each night. `room` lights take turns for `room_minutes`
+(40-60), and sometimes overlap for 10-30 min (`overlap_chance`, `overlap_minutes`). `short` lights get bathroom-length
+visits. Everything is off by a random bedtime between `bedtime_from` and `bedtime_to` (23:00-24:00). Turning it off
+turns off only what it turned on. The state is kept in `data/away.json`.
+
+**Tests:** `python3 -m unittest tests.test_away`.
+
+## Laundry check (0.26.0)
+
+Optional, for an RTSP camera with ONVIF pan/tilt that can see your clotheslines. After each weather update, if it rains
+now or the hourly chance reaches `rain_probability` (50%) within `rain_hours` (3), and it's daylight, `laundry.py`
+checks the clotheslines. It checks once per rain spell, and again after `repeat_hours`, or once the rain has gone from
+the forecast and come back (at least `min_gap_minutes` apart).
+
+- **Getting there:** cheap cameras often have no position feedback and ignore presets. Every recipe in
+  `laundry.lines[].moves` starts by pushing into the right and top end stops, then counts nudges (`"left 8"`).
+- **Lining up:** the frame is compared with `ref`, a picture of the empty line, for every shift up to `max_shift`.
+  While the shift is more than half a nudge, the camera nudges back (up to 3 times); the boxes are then moved by
+  whatever shift is left.
+- **Laundry or not:** mean HSV saturation in each box, against its `saturation` threshold (halfway between empty and
+  full, measured in sun). Shadows barely change saturation once the boxes are lined up.
+- **Warnings:** every `notify_services` entry (e.g. `notify.mobile_app_<phone>` with the Home Assistant companion app),
+  a tablet banner until tapped, an amber banner in the modern view until dismissed, and a spoken line.
+- **People first:** a check waits while someone is using the pan/tilt buttons, and stops at once if they start.
+- Run one by hand with `curl -X POST -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:8099/api/laundry/check`.
+
+**Tests:** `python3 -m unittest tests.test_laundry` (a fake camera with end stops and a fake FFmpeg).
+
 ## Weather data
 
 From the [Open-Meteo](https://open-meteo.com/) Forecast API. It needs no key, and the free tier is **for non-commercial use
@@ -606,6 +673,12 @@ about 96 rows a day. One-time setup, run by the owner: `sudo -u postgres createu
 
 This release is for a **trusted local network**, not public hosting or remote access. The admin page uses HTTPS and a login, but **Home actions and camera endpoints rely primarily on LAN restrictions**. Network names or separate Wi-Fi SSIDs alone do not guarantee isolation; enforce device separation with actual network access rules where available. Keep guest/untrusted devices from reaching the dashboard, and do not reverse-proxy these endpoints onto the public internet as-is.
 
+**Your own remote devices (0.28.0):** `assistant.trusted_ips` lists exact addresses treated like home-network clients,
+for example your phone's Tailscale `100.x` address (`"trusted_ips": ["100.x.y.z"]`). List single addresses only (ranges
+are rejected), because a listed device gets the controls and cameras with no password. The admin page ignores this list.
+Add the device's MagicDNS name to `allowed_hosts` if you open the dashboard by name. Don't expose the dashboard with
+Tailscale Funnel or Serve: those requests arrive from `127.0.0.1` and would pass the home-network check.
+
 Per-action authorization, especially for security-sensitive home controls, and an authenticated remote-access gateway are future work after the core experience is stable. This is an explicitly accepted current limitation, not a claim of hardened security.
 
 ## Known limitations
@@ -614,7 +687,8 @@ Per-action authorization, especially for security-sensitive home controls, and a
 - English-only day and month names.
 - The RTSP live-view path is still being stabilized; initial-frame timeouts and real-hardware behavior require verification before calling the feature production-ready.
 - Home/camera hardware compatibility and the new tablet UI still need full end-to-end validation on the original Android 4.4 device. The automated suite uses mocks.
-- Logs are not rotated.
+- Logs are rotated by the optional `tablet-logrotate` timer (0.29.0); routine noise (successful API polls, background
+  snapshots, dropped connections) is not logged at INFO.
 - Answers are not streamed and can take a few seconds.
 - On an 800 × 400 screen the on-screen keyboard covers much of the Ask tab.
 - Provider free tiers and rate limits change. Check current terms before relying on them.

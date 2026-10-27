@@ -1,0 +1,11 @@
+# Daily log rotation for the dashboard (installed by scripts/install-autostart.sh).
+[Unit]
+Description=Daily tablet dashboard log rotation
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

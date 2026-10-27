@@ -91,3 +91,58 @@ def remove_values(env_path, names):
     if len(kept) != len(lines):
         write_private(env_path, "\n".join(kept) + "\n" if kept else "")
     return len(lines) - len(kept)
+
+
+# --- API keys ---------------------------------------------------------------------------------
+
+KEY_RE = re.compile(r"^[A-Za-z0-9._~+/=-]{8,512}$")
+
+
+def load_api_key(env_path, names):
+    """Return (key, problem). Exactly one is None. Messages never contain the key.
+
+    `names` are variable names in priority order (e.g. a standard name plus an alias). The
+    environment wins over the file. A .env file is used only if it is a regular, non-symlink
+    file owned by this user with no group/other permissions.
+    """
+    key = ""
+    for name in names:
+        key = os.environ.get(name, "").strip()
+        if key:
+            break
+    if not key:
+        try:
+            fd = os.open(env_path, os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            return None, "not_configured"
+        except OSError:
+            return None, "insecure_file"
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o077 or st.st_uid != os.getuid():
+                return None, "insecure_file"
+            raw = os.read(fd, 8192).decode("utf-8", "replace")
+        finally:
+            os.close(fd)
+        found = {}
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[7:].lstrip()
+            name, sep, value = line.partition("=")
+            if sep and name.strip() in names:
+                value = value.strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                    value = value[1:-1]
+                found[name.strip()] = value.strip()
+        for name in names:
+            if found.get(name):
+                key = found[name]
+                break
+        if not key:
+            return None, "not_configured"
+    if not KEY_RE.match(key):
+        return None, "invalid_key_format"
+    return key, None

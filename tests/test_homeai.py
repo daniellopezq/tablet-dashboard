@@ -129,6 +129,19 @@ class MatcherTests(HomeFixture, unittest.TestCase):
                      "turn on the fan and turn off the recamara", "abanico"):
             self.assertIsNone(self.m(text), text)
 
+    def test_sensor_is_never_switched(self):
+        self.home.cfg["buttons"].append({"id": "garage", "label": "Garaje", "kind": "sensor",
+                                         "state_entity": "input_boolean.garage_open", "aliases": ["garage", "cochera"],
+                                         "words": {"on": "Open", "off": "Closed"},
+                                         "words_es": {"on": "abierto", "off": "cerrado"}})
+        MockHA.states["input_boolean.garage_open"] = "on"
+        self.assertEqual(self.m("¿está abierto el garaje?"), {"type": "state", "ids": ["garage"]})
+        self.assertEqual(self.m("apaga la cochera"), {"type": "state", "ids": ["garage"]})  # answers, doesn't act
+        self.assertIsNone(self.house.valid_action("garage", "off"))
+        self.assertEqual(self.house.state_answer(["garage"], "es"), "Garaje: abierto.")
+        self.assertEqual(self.house.state_answer(["garage"], "en"), "Garaje: open.")
+        self.assertIn("read-only status", self.house.context_text())
+
     def test_state_questions(self):
         self.assertEqual(self.m("¿está prendido el abanico?"), {"type": "state", "ids": ["fan"]})
         self.assertEqual(self.m("is the alarm armed?"), {"type": "state", "ids": ["alarm"]})

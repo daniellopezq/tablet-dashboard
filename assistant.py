@@ -12,31 +12,29 @@ A short per-conversation memory (the last few turns, forgotten after memory_seco
 follow-ups work. Python 3 standard library only. The API key is read from the environment or a private
 .env file and is never logged, returned to clients or written anywhere else.
 
-Global usage limits (min interval, per-hour, per-day) are enforced here and persisted in a
-small JSON store outside the web directory, protected by a thread lock and an flock so
-concurrent requests and restarts cannot bypass them.
+Global usage limits (min interval, per-hour, per-day) are enforced with usage.UsageStore; cloud calls go
+through upstream.post_bounded (no redirects, bounded size and time).
 """
-import contextlib
-import fcntl
 import ipaddress
 import json
 import logging
-import math
 import os
 import re
-import stat
 import sys
-import tempfile
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import envfile
 import fallback as fb
 import netsim
+from upstream import NoRedirect, UpstreamError, post_bounded
+from usage import UsageStore, fmt_wait
+from util import now_ms, num as _num
 
 log = logging.getLogger("dashboard.assistant")
 
@@ -90,10 +88,7 @@ LOOK_PROMPT = (
 LOCAL_TEMPERATURE = 0.3  # the 2B model was most accurate at low temperature in testing
 
 KEY_ENV = "AI_GATEWAY_API_KEY"
-KEY_RE = re.compile(r"^[A-Za-z0-9._~+/=-]{8,512}$")
 MAX_ANSWER_CHARS = 4000
-HOUR_MS = 3600 * 1000
-KEEP_MS = 50 * HOUR_MS
 
 DEFAULT_ASSISTANT_CONFIG = {
     "enabled": True,
@@ -113,6 +108,9 @@ DEFAULT_ASSISTANT_CONFIG = {
     "max_per_day": 100,
     "quota_block_minutes": 60,
     "allowed_hosts": [],
+    # Exact addresses (e.g. your own Tailscale devices) treated like home-network clients. Never
+    # list a whole range: anyone who can reach the server from a listed address gets the controls.
+    "trusted_ips": [],
     "price_per_million_input_usd": None,
     "price_per_million_output_usd": None,
     # Local fallback (llama-server on this machine). Used ONLY when the cloud sends no response
@@ -132,14 +130,6 @@ DEFAULT_ASSISTANT_CONFIG = {
 }
 MAX_CONVERSATIONS = 20
 CONVERSATION_RE = re.compile(r"^[a-z0-9-]{8,40}$")
-
-
-def now_ms():
-    return int(time.time() * 1000)
-
-
-def _num(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def validate_assistant_config(a):
@@ -170,6 +160,15 @@ def validate_assistant_config(a):
         raise ValueError("assistant.disable_thinking must be true or false")
     if not isinstance(a["allowed_hosts"], list) or not all(isinstance(h, str) for h in a["allowed_hosts"]):
         raise ValueError("assistant.allowed_hosts must be a list of host names")
+    if not isinstance(a["trusted_ips"], list):
+        raise ValueError("assistant.trusted_ips must be a list of IP addresses")
+    for ip in a["trusted_ips"]:
+        try:
+            addr = ipaddress.ip_address(ip) if isinstance(ip, str) else None
+        except ValueError:
+            addr = None
+        if addr is None or addr.is_unspecified:
+            raise ValueError("assistant.trusted_ips: %r is not a single IP address" % (ip,))
     for key in ("price_per_million_input_usd", "price_per_million_output_usd"):
         if a[key] is not None and (not _num(a[key]) or a[key] < 0):
             raise ValueError("assistant.%s must be a non-negative number or null" % key)
@@ -201,103 +200,7 @@ def validate_fallback_config(c, section, token_range=None):
             raise ValueError("%s.%s must be a number %s-%s" % (section, key, lo, hi))
 
 
-# --- API key -------------------------------------------------------------------------------
-
-def load_api_key(env_path, names=(KEY_ENV,)):
-    """Return (key, problem). Exactly one is None. Messages never contain the key.
-
-    `names` are variable names in priority order (e.g. a standard name plus an alias). The
-    environment wins over the file. A .env file is used only if it is a regular, non-symlink
-    file owned by this user with no group/other permissions.
-    """
-    key = ""
-    for name in names:
-        key = os.environ.get(name, "").strip()
-        if key:
-            break
-    if not key:
-        try:
-            fd = os.open(env_path, os.O_RDONLY | os.O_NOFOLLOW)
-        except FileNotFoundError:
-            return None, "not_configured"
-        except OSError:
-            return None, "insecure_file"
-        try:
-            st = os.fstat(fd)
-            if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o077 or st.st_uid != os.getuid():
-                return None, "insecure_file"
-            raw = os.read(fd, 8192).decode("utf-8", "replace")
-        finally:
-            os.close(fd)
-        found = {}
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if line.startswith("export "):
-                line = line[7:].lstrip()
-            name, sep, value = line.partition("=")
-            if sep and name.strip() in names:
-                value = value.strip()
-                if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-                    value = value[1:-1]
-                found[name.strip()] = value.strip()
-        for name in names:
-            if found.get(name):
-                key = found[name]
-                break
-        if not key:
-            return None, "not_configured"
-    if not KEY_RE.match(key):
-        return None, "invalid_key_format"
-    return key, None
-
-
-# --- request checks (used by the HTTP handler) ---------------------------------------------
-
-def is_lan_client(ip):
-    """True for loopback and private-range clients only (the assistant is LAN-only)."""
-    try:
-        addr = ipaddress.ip_address(ip.split("%")[0])
-    except ValueError:
-        return False
-    if addr.version == 6 and addr.ipv4_mapped:
-        addr = addr.ipv4_mapped
-    return addr.is_loopback or addr.is_private or addr.is_link_local
-
-
-def _host_only(value):
-    value = (value or "").strip().lower()
-    if value.startswith("["):
-        return value[1:].split("]")[0]
-    return value.rsplit(":", 1)[0] if value.count(":") == 1 else value
-
-
-def check_origin(headers, allowed_hosts):
-    """Return an error string for cross-origin or rebinding-suspect requests, else None."""
-    host = headers.get("Host", "")
-    hostname = _host_only(host)
-    if not hostname:
-        return "missing host"
-    is_ip = True
-    try:
-        ipaddress.ip_address(hostname)
-    except ValueError:
-        is_ip = False
-    if not is_ip and hostname != "localhost" and hostname not in [h.lower() for h in allowed_hosts]:
-        return "host not allowed"
-    origin = headers.get("Origin")
-    if origin is not None:
-        if origin == "null":
-            return "cross-origin"
-        parts = urllib.parse.urlsplit(origin)
-        if parts.scheme not in ("http", "https") or parts.netloc.lower() != host.strip().lower():
-            return "cross-origin"
-    site = headers.get("Sec-Fetch-Site")
-    if site is not None and site not in ("same-origin", "none"):
-        return "cross-site"
-    return None
-
+# --- request parsing (used by routes/ai.py) ----------------------------------------------
 
 class RequestError(Exception):
     def __init__(self, status, code, message):
@@ -363,238 +266,6 @@ def _check_question(q, cfg):
     if len(q) > cfg["max_question_chars"]:
         raise RequestError(400, "too_long", "Questions are limited to %d characters." % cfg["max_question_chars"])
     return q
-
-
-# --- usage store ---------------------------------------------------------------------------
-
-def _fmt_wait(seconds):
-    seconds = max(1, int(math.ceil(seconds)))
-    if seconds < 90:
-        return "%d seconds" % seconds
-    minutes = int(math.ceil(seconds / 60.0))
-    if minutes < 90:
-        return "%d minutes" % minutes
-    return "%d hours" % int(math.ceil(minutes / 60.0))
-
-
-class UsageStore:
-    """Persistent attempt counters plus an append-only usage log. Safe across threads/processes."""
-
-    def __init__(self, state_path, usage_path, tz, clock=now_ms):
-        self.state_path = state_path
-        self.usage_path = usage_path
-        self.tz = tz
-        self.clock = clock
-        self._tlock = threading.Lock()
-
-    @contextlib.contextmanager
-    def _locked(self):
-        directory = os.path.dirname(self.state_path)
-        os.makedirs(directory, mode=0o700, exist_ok=True)
-        with self._tlock:
-            fd = os.open(self.state_path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX)
-                yield
-            finally:
-                os.close(fd)  # closing releases the flock
-
-    def _load(self):
-        state = {"attempts": [], "blocked_until_ms": 0, "blocked_reason": ""}
-        try:
-            with open(self.state_path, encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                attempts = data.get("attempts")
-                if isinstance(attempts, list):
-                    state["attempts"] = sorted(int(t) for t in attempts if isinstance(t, int))
-                if isinstance(data.get("blocked_until_ms"), int):
-                    state["blocked_until_ms"] = data["blocked_until_ms"]
-                if isinstance(data.get("blocked_reason"), str):
-                    state["blocked_reason"] = data["blocked_reason"][:64]
-        except FileNotFoundError:
-            pass
-        except (OSError, ValueError, TypeError):
-            # Unreadable counters must not silently reset limits: fail closed for this call.
-            log.error("assistant: usage state unreadable; refusing requests until it is fixed")
-            raise
-        return state
-
-    def _save(self, state):
-        directory = os.path.dirname(self.state_path)
-        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".state-", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(state, f, separators=(",", ":"))
-                f.flush()
-                os.fsync(f.fileno())
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, self.state_path)
-        except BaseException:
-            with contextlib.suppress(OSError):
-                os.remove(tmp)
-            raise
-
-    def _day_bounds(self, now):
-        local = datetime.fromtimestamp(now / 1000.0, self.tz)
-        start = local.replace(hour=0, minute=0, second=0, microsecond=0)
-        nxt = (start + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        return int(start.timestamp() * 1000), int(nxt.timestamp() * 1000)
-
-    def _counts(self, state, now, limits):
-        day_start, day_end = self._day_bounds(now)
-        attempts = state["attempts"]
-        hour = [t for t in attempts if t > now - HOUR_MS]
-        day = [t for t in attempts if t >= day_start]
-        return {
-            "hour_used": len(hour), "day_used": len(day),
-            "hour_left": max(0, limits["max_per_hour"] - len(hour)),
-            "day_left": max(0, limits["max_per_day"] - len(day)),
-            "hour_list": hour, "day_end": day_end,
-        }
-
-    def snapshot(self, limits):
-        """Read-only view for the status endpoint."""
-        now = self.clock()
-        with self._locked():
-            state = self._load()
-            c = self._counts(state, now, limits)
-        blocked = state["blocked_until_ms"] > now
-        return {
-            "remaining": {"hour": c["hour_left"], "day": c["day_left"]},
-            "blocked": blocked,
-            "blocked_retry_after": int(math.ceil((state["blocked_until_ms"] - now) / 1000.0)) if blocked else 0,
-        }
-
-    def reserve(self, limits):
-        """Check limits and, if allowed, durably count one attempt before the upstream call.
-
-        Returns (allowed, info). info has retry_after/code/message when denied, or remaining
-        counts when allowed.
-        """
-        now = self.clock()
-        with self._locked():
-            state = self._load()
-            state["attempts"] = [t for t in state["attempts"] if t > now - KEEP_MS]
-            if state["blocked_until_ms"] > now:
-                wait = (state["blocked_until_ms"] - now) / 1000.0
-                return False, {"code": "quota_exhausted", "status": 503, "retry_after": int(math.ceil(wait)),
-                               "message": "The assistant is unavailable: the AI credit or access allowance "
-                                          "was reported as used up. It will be checked again in about %s."
-                                          % _fmt_wait(wait)}
-            c = self._counts(state, now, limits)
-            denials = []
-            attempts = state["attempts"]
-            interval = limits["min_interval_seconds"] * 1000
-            if attempts and now - attempts[-1] < interval:
-                wait = (attempts[-1] + interval - now) / 1000.0
-                denials.append((wait, "rate_limited", "Please wait %s before asking again." % _fmt_wait(wait)))
-            if c["hour_used"] >= limits["max_per_hour"]:
-                hour = c["hour_list"]
-                release = hour[len(hour) - limits["max_per_hour"]] + HOUR_MS
-                wait = (release - now) / 1000.0
-                denials.append((wait, "hourly_limit", "Hourly limit of %d %s reached. Try again in about %s."
-                                % (limits["max_per_hour"], limits.get("noun", "questions"), _fmt_wait(wait))))
-            if c["day_used"] >= limits["max_per_day"]:
-                wait = (c["day_end"] - now) / 1000.0
-                denials.append((wait, "daily_limit", "Daily limit of %d %s reached. It resets at midnight "
-                                "(%s time), in about %s."
-                                % (limits["max_per_day"], limits.get("noun", "questions"), self.tz.key, _fmt_wait(wait))))
-            if denials:
-                wait, code, message = max(denials, key=lambda d: d[0])
-                return False, {"code": code, "status": 429, "retry_after": int(math.ceil(wait)), "message": message}
-            attempts.append(now)
-            self._save(state)
-            return True, {"remaining": {"hour": c["hour_left"] - 1, "day": c["day_left"] - 1}}
-
-    def block(self, minutes, reason):
-        with self._locked():
-            state = self._load()
-            state["blocked_until_ms"] = self.clock() + int(minutes * 60000)
-            state["blocked_reason"] = reason
-            self._save(state)
-
-    def clear_block(self):
-        with self._locked():
-            state = self._load()
-            state["blocked_until_ms"] = 0
-            state["blocked_reason"] = ""
-            self._save(state)
-
-    def record(self, entry):
-        """Append one usage line (metadata only; never question, answer or key)."""
-        line = json.dumps(entry, separators=(",", ":"), sort_keys=True)
-        with self._locked():
-            fd = os.open(self.usage_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-            try:
-                os.write(fd, (line + "\n").encode("utf-8"))
-            finally:
-                os.close(fd)
-
-
-# --- upstream call -------------------------------------------------------------------------
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Never follow redirects: the Authorization header must not leave the configured host."""
-
-    def redirect_request(self, *args, **kwargs):
-        return None
-
-
-class UpstreamError(Exception):
-    def __init__(self, category, http_status=None, retry_after=None, error_type=""):
-        super().__init__(category)
-        self.category, self.http_status = category, http_status
-        self.retry_after, self.error_type = retry_after, error_type
-
-
-def _clean_token(value):
-    value = value if isinstance(value, str) else ""
-    return value if re.match(r"^[A-Za-z0-9_.-]{1,64}$", value) else ""
-
-
-def post_bounded(opener, cloud, req, timeout, limit, no_response_seconds=None):
-    """Send req and return the response body (at most `limit` bytes, within `timeout` overall).
-
-    With no_response_seconds, the request goes through `cloud` (a fallback.HeaderDeadlineOpener)
-    and raises fallback.NoResponse when no headers arrive in time; that is the only fallback
-    trigger. Every other failure raises UpstreamError, including any received HTTP status
-    (classified by status) and any failure after the headers arrived.
-    """
-    deadline = time.monotonic() + timeout
-    if no_response_seconds is None and cloud is not None and netsim.blocked(cloud.service):
-        raise UpstreamError("network_error")  # offline test with the fallback turned off
-    try:
-        if no_response_seconds is None:
-            resp = opener.open(req, timeout=timeout)
-        else:
-            resp = cloud.open(req, min(no_response_seconds, timeout), timeout)
-        with resp:
-            length = resp.headers.get("Content-Length")
-            if length and length.isdigit() and int(length) > limit:
-                raise UpstreamError("bad_response", resp.status)
-            chunks, total = [], 0
-            while True:
-                chunk = resp.read(16384)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > limit:
-                    raise UpstreamError("bad_response", resp.status)
-                if time.monotonic() > deadline:
-                    raise UpstreamError("timeout")
-                chunks.append(chunk)
-    except urllib.error.HTTPError as exc:
-        raise Assistant._classify_http_error(exc)
-    except (UpstreamError, fb.NoResponse):
-        raise
-    except (TimeoutError, OSError) as exc:
-        if isinstance(exc, TimeoutError) or "timed out" in str(exc):
-            raise UpstreamError("timeout")
-        raise UpstreamError("network_error")
-    except Exception:
-        raise UpstreamError("network_error")
-    return b"".join(chunks)
 
 
 class Conversations:
@@ -676,7 +347,7 @@ class Assistant:
         self.store = UsageStore(os.path.join(base_dir, cfg["state_file"]),
                                 os.path.join(base_dir, cfg["usage_log"]), tz, clock)
         self._inflight = threading.Lock()
-        self._opener = urllib.request.build_opener(_NoRedirect)
+        self._opener = urllib.request.build_opener(NoRedirect)
         self._cloud = fb.HeaderDeadlineOpener(self._opener, "ask")
         self.gate = fb.CloudGate(cfg["cloud_cooldown_seconds"])
         self._warned = set()
@@ -694,14 +365,14 @@ class Assistant:
 
     # -- status ---------------------------------------------------------------------------
     def _key_problem(self):
-        key, problem = load_api_key(self.env_path)
+        key, problem = envfile.load_api_key(self.env_path, (KEY_ENV,))
         if problem and problem not in self._warned:
             self._warned.add(problem)
             log.warning("assistant: API key not usable (%s); see README", problem)
         return key, problem
 
     def status(self):
-        key, problem = load_api_key(self.env_path)
+        key, problem = envfile.load_api_key(self.env_path, (KEY_ENV,))
         out = {"enabled": self.cfg["enabled"], "configured": key is not None,
                "setup_problem": problem, "model": self.cfg["model"],
                "max_question_chars": self.cfg["max_question_chars"],
@@ -974,7 +645,7 @@ class Assistant:
             wait = self.cfg["quota_block_minutes"] * 60
             return self._err(503, "quota_exhausted",
                              "The assistant is unavailable: the AI credit allowance is used up or the account "
-                             "has no access. No further requests will be sent for about %s." % _fmt_wait(wait), wait)
+                             "has no access. No further requests will be sent for about %s." % fmt_wait(wait), wait)
         if cat == "access_denied":
             self.store.block(self.cfg["quota_block_minutes"], "upstream_403")
             return self._err(503, "unavailable",
@@ -986,7 +657,7 @@ class Assistant:
                                                   "Replace the key on the server (see README).")
         if cat == "provider_rate_limited":
             wait = exc.retry_after or 30
-            return self._err(429, "provider_busy", "The AI service is busy. Try again in about %s." % _fmt_wait(wait), wait)
+            return self._err(429, "provider_busy", "The AI service is busy. Try again in about %s." % fmt_wait(wait), wait)
         if cat == "timeout":
             return self._err(504, "timeout", "The AI service took too long to answer. Try again.")
         if cat == "network_error":
@@ -1062,33 +733,6 @@ class Assistant:
         if not result["answer"]:
             raise UpstreamError("empty_answer", 200)
         return result
-
-    @staticmethod
-    def _classify_http_error(exc):
-        status = exc.code
-        error_type = ""
-        try:
-            data = json.loads(exc.read(4096).decode("utf-8", "replace"))
-            err = data.get("error") if isinstance(data, dict) else None
-            if isinstance(err, dict):
-                error_type = _clean_token(err.get("type")) or _clean_token(err.get("code"))
-        except Exception:
-            pass
-        retry_after = None
-        header = exc.headers.get("retry-after") if exc.headers else None
-        if header and header.strip().isdigit():
-            retry_after = min(max(int(header.strip()), 1), 3600)
-        if status == 401:
-            return UpstreamError("auth_error", status, error_type=error_type)
-        if status == 402:
-            return UpstreamError("quota_exhausted", status, error_type=error_type)
-        if status == 403:
-            return UpstreamError("access_denied", status, error_type=error_type)
-        if status == 429:
-            return UpstreamError("provider_rate_limited", status, retry_after, error_type)
-        if status >= 500:
-            return UpstreamError("upstream_5xx", status, error_type=error_type)
-        return UpstreamError("upstream_rejected", status, error_type=error_type)
 
     @staticmethod
     def _parse_success(raw):

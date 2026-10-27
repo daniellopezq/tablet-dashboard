@@ -12,9 +12,9 @@ import unittest
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import assistant as assistant_mod  # noqa: E402
 import fallback as fb  # noqa: E402
 import netsim  # noqa: E402
+import upstream  # noqa: E402
 
 
 class FakeClock:
@@ -134,8 +134,8 @@ class HookTests(SimTestCase):
         inner = CountingOpener()
         cloud = fb.HeaderDeadlineOpener(inner, "ask")
         self.sim.turn_on(["ask"], "instant", 5)
-        with self.assertRaises(assistant_mod.UpstreamError) as cm:
-            assistant_mod.post_bounded(inner, cloud, self.req(), 5, 1000, no_response_seconds=None)
+        with self.assertRaises(upstream.UpstreamError) as cm:
+            upstream.post_bounded(inner, cloud, self.req(), 5, 1000, no_response_seconds=None)
         self.assertEqual(cm.exception.category, "network_error")
         self.assertEqual(inner.calls, 0)
 

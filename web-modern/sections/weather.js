@@ -1,6 +1,6 @@
 import { h, icon, replace, card, message } from '../lib/dom.js';
 import { subscribe } from '../lib/store.js';
-import { onTick, clockParts, formatDate, dayLabel, ago, toggle24h, isSynced } from '../lib/clock.js';
+import { onTick, clockParts, formatDate, dayLabel, ago, toggle24h, isSynced, formatWallHM } from '../lib/clock.js';
 
 const temp = (v) => (v == null ? '--' : `${Math.round(v)}°`);
 
@@ -44,6 +44,29 @@ function nowBlock(w) {
         c.humidity != null ? ` · ${c.humidity}% humidity` : '')));
 }
 
+const RAIN_LIKELY = 50;  // same as laundry.rain_probability: from here the laundry check runs
+const wallHM = (t) => formatWallHM(String(t).slice(11, 16));
+
+/** Rain chance for the next 12 hours (next_hours): a summary line and one bar per hour. */
+function rainStrip(w, compact) {
+  const hours = (w.data.next_hours ?? []).filter((x) => x.precipitation_probability != null);
+  if (!hours.length) return null;
+  const top = hours.reduce((a, b) => (b.precipitation_probability > a.precipitation_probability ? b : a));
+  const p = top.precipitation_probability;
+  const text = p < 20 ? `Rain unlikely in the next ${hours.length} h`
+    : `Rain chance up to ${p}% around ${wallHM(top.time)}`;
+  return h('div', { class: `wx-rain ${compact ? 'compact' : ''}` },
+    h('div', { class: `wx-rain-text ${p >= RAIN_LIKELY ? 'warn' : ''}` }, text),
+    h('div', { class: 'wx-rain-bars', role: 'img', 'aria-label': `Rain chance by hour: ${hours.map((x) => `${wallHM(x.time)} ${x.precipitation_probability}%`).join(', ')}` },
+      hours.map((x, i) => {
+        const v = x.precipitation_probability;
+        return h('div', { class: 'wx-rain-col', title: `${wallHM(x.time)}: ${v}%${x.precipitation ? ` · ${x.precipitation} mm` : ''}` },
+          !compact && h('span', { class: 'wx-rain-pct' }, v >= 10 ? `${v}%` : ''),
+          h('span', { class: 'wx-rain-track' }, h('i', { class: v >= RAIN_LIKELY ? 'likely' : '', style: `height:${Math.max(v, 2)}%` })),
+          h('span', { class: 'wx-rain-hour' }, i % 3 === 0 ? wallHM(x.time).replace(':00', '') : ''));
+      })));
+}
+
 function forecast(w) {
   return h('div', { class: 'wx-days' }, w.data.forecast.map((d) =>
     h('div', { class: 'wx-day' },
@@ -65,7 +88,7 @@ export default {
     const unsub = subscribe('weather', (w, err) => {
       const p = problem(w, err);
       if (p) return replace(body, p);
-      replace(body, h('p', { class: 'wx-place' }, w.label), nowBlock(w), forecast(w), metaLine(w));
+      replace(body, h('p', { class: 'wx-place' }, w.label), nowBlock(w), rainStrip(w, false), forecast(w), metaLine(w));
     });
     return () => { clock.stop(); unsub(); };
   },
@@ -77,7 +100,7 @@ export default {
     const unsub = subscribe('weather', (w, err) => {
       const p = problem(w, err);
       if (p) return replace(body, p);
-      replace(body, nowBlock(w), forecast(w));
+      replace(body, nowBlock(w), rainStrip(w, true), forecast(w));
     });
     return () => { clock.stop(); unsub(); };
   },

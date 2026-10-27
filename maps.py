@@ -21,6 +21,7 @@ import urllib.request
 from PIL import Image, ImageDraw, ImageEnhance
 
 import netsim
+from util import num as _num
 
 log = logging.getLogger("dashboard.maps")
 
@@ -60,9 +61,6 @@ DEFAULT_MAPS_CONFIG = {
     "cache_dir": "data/maps",
 }
 
-
-def _num(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def validate_maps_config(m):

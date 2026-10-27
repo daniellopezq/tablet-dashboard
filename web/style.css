@@ -154,6 +154,21 @@ button {
   text-align: center;
   z-index: 20;
 }
+/* Laundry warning (laundry.py): stays until tapped */
+.laundry-banner {
+  position: absolute;
+  left: 16px; right: 16px; top: 16px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: #6b4a12;
+  border: 2px solid #e0a43a;
+  color: #fff6e6;
+  font-size: 20px;
+  text-align: center;
+  z-index: 21;
+}
+/* Read-only tile warning (garage left open): same look, at the bottom so it never covers the laundry one */
+.hc-alert { top: auto; bottom: 16px; }
 /* "Go to" header: link to the modern view (a PC that got the classic view, e.g. after "Classic view") */
 .ui-switch { display: inline-block; margin-right: 12px; padding: 0 14px; line-height: 50px; color: #e8edf2; text-decoration: none; text-align: center; box-sizing: border-box; }
 .tool-btn:active, .step-btn:active, .nav-current:active, .jump-tile:active, .overlay-close:active { background: #263445; }

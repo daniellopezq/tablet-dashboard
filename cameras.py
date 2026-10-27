@@ -33,39 +33,20 @@ of the camera moves there (in memory; config.json is not rewritten, so update it
 
 Configured under "cameras" in config.json. Python 3 standard library plus the ffmpeg binary.
 """
-import collections
 import logging
 import re
-import subprocess
 import threading
 import time
 import urllib.parse
 from datetime import datetime
 
-import assistant
+import envfile
 import onvif
 from home import ActionError, ID_RE, SERVICE_RE, validate_aliases
-from voice import resolve_ffmpeg
+from livefeed import LiveFeed
+from util import num as _num
 
 log = logging.getLogger("dashboard.cameras")
-
-_FLAG_CACHE = {}
-
-
-def rtsp_timeout_flag(ffmpeg):
-    """The RTSP socket timeout option: "-stimeout" up to ffmpeg 4.x, "-timeout" from 5.0 (which removed
-    -stimeout; in 4.x -timeout meant "listen for a connection"). Ubuntu's ffmpeg 6.1 replaced the snap's 4.3
-    on PATH on 2026-10-25."""
-    if ffmpeg not in _FLAG_CACHE:
-        major = 0
-        try:
-            out = subprocess.run([ffmpeg, "-hide_banner", "-version"], capture_output=True, timeout=10).stdout
-            m = re.match(rb"ffmpeg version n?(\d+)\.", out)
-            major = int(m.group(1)) if m else 0
-        except (OSError, subprocess.SubprocessError):
-            pass
-        _FLAG_CACHE[ffmpeg] = "-timeout" if major >= 5 else "-stimeout"
-    return _FLAG_CACHE[ffmpeg]
 
 DEFAULT_CAMERAS_CONFIG = {
     "enabled": True,
@@ -85,7 +66,6 @@ DEFAULT_CAMERAS_CONFIG = {
 }
 AI_REFRESH_MAX_BACKOFF = 600   # seconds between tries after repeated HA/Blink failures
 MAX_CAMERAS = 6  # the Cameras tab shows 2x2, or 3x2 for 5-6 cameras
-MAX_VIEWERS = 4  # live connections per camera
 CAMERA_RE = re.compile(r"^camera\.[a-z0-9_]{1,128}$")
 SENSOR_RE = re.compile(r"^binary_sensor\.[a-z0-9_]{1,128}$")
 # No user:password@, no query string: credentials don't belong in config.json, and the URL goes to ffmpeg.
@@ -94,9 +74,6 @@ PROXY_RE = re.compile(r"^http://[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$")
 SLUG_RE = re.compile(r"^[^\W_A-Z][^\WA-Z]{0,63}$")  # the proxy's names keep accents: "cámara_patio"
 ONVIF_RE = re.compile(r"^http://[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]{0,200})?$")
 
-
-def _num(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def validate_camera(c):
@@ -194,212 +171,11 @@ def _iso_ms(value):
         return None
 
 
-class LiveFeed:
-    """One RTSP camera: an ffmpeg that runs only while someone is looking, and its latest JPEG frame."""
-
-    MAX_BUFFER = 4 * 1024 * 1024   # bytes without a complete frame before the buffer is dropped
-    FIRST_FRAME_SECONDS = 10       # how long a still or a new viewer waits for ffmpeg's first frame
-    RETRY_SECONDS = 5              # no new ffmpeg sooner than this after one failed
-
-    def __init__(self, cam, cfg, url=None, name=None, on_failure=None, headers=None):
-        self.cam = cam
-        self.cfg = cfg
-        self.url = url or cam["rtsp_url"]
-        self.name = name or cam["id"]
-        self.on_failure = on_failure  # called (no arguments) when an ffmpeg ends without a single frame
-        self.headers = headers        # () -> {name: value} for an http:// input, read at each start
-        self._cv = threading.Condition()
-        self._proc = None
-        self._frame = None
-        self._frame_at = 0.0       # time.time() of the latest frame
-        self._seq = 0
-        self._viewers = 0
-        self._last_use = 0.0       # time.monotonic() of the last still or viewer
-        self._failed_at = None     # time.monotonic() of the last ffmpeg that ended without a frame
-        self.error = None          # why the last ffmpeg ended, for the tablet
-
-    def command(self):
-        ffmpeg = resolve_ffmpeg(self.cfg["ffmpeg_path"])
-        if self.url.startswith("http://"):
-            # Headers on the command line, not in the URL: ffmpeg's errors (shown on the page) quote the URL.
-            extra = "".join("%s: %s\r\n" % kv for kv in (self.headers() if self.headers else {}).items())
-            # Blink sends 1080p; 720p is plenty for these screens and much cheaper to re-encode.
-            source = (["-headers", extra] if extra else []) + ["-rw_timeout", "15000000", "-i", self.url,
-                                                              "-vf", "scale=-2:'min(720,ih)'"]
-        else:
-            source = ["-rtsp_transport", "tcp", rtsp_timeout_flag(ffmpeg), "5000000", "-i", self.url]
-        return [ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error"] + source + [
-                "-an", "-r", str(self.cam.get("live_fps", 10)), "-c:v", "mjpeg", "-q:v", "6",
-                "-f", "image2pipe", "-"]
-
-    def _start_locked(self):
-        if self._proc is not None:
-            return True
-        if self._failed_at is not None and time.monotonic() - self._failed_at < self.RETRY_SECONDS:
-            return False
-        try:
-            proc = subprocess.Popen(self.command(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE)
-        except OSError as exc:
-            self._failed_at = time.monotonic()
-            self.error = "ffmpeg did not start (%s)" % exc.strerror
-            return False
-        self._proc = proc
-        self._last_use = time.monotonic()
-        tail = collections.deque(maxlen=20)
-        threading.Thread(target=self._drain, args=(proc, tail), name="camera-ffmpeg-err", daemon=True).start()
-        threading.Thread(target=self._read, args=(proc, tail), name="camera-ffmpeg", daemon=True).start()
-        log.info("cameras: live feed for %s started (pid %d)", self.name, proc.pid)
-        return True
-
-    @staticmethod
-    def _drain(proc, tail):
-        for line in proc.stderr:
-            tail.append(line.decode("utf-8", "replace").strip())
-
-    def _read(self, proc, tail):
-        buf = b""
-        got_frame = False
-        idle = False
-        while True:
-            chunk = proc.stdout.read1(65536)
-            if not chunk:
-                break
-            buf += chunk
-            frames = []
-            while True:
-                start = buf.find(b"\xff\xd8")
-                end = buf.find(b"\xff\xd9", start + 2) if start >= 0 else -1
-                if end < 0:
-                    break
-                frames.append(buf[start:end + 2])
-                buf = buf[end + 2:]
-            if len(buf) > self.MAX_BUFFER:
-                buf = b""
-            with self._cv:
-                if frames:
-                    got_frame = True
-                    self._frame = frames[-1]
-                    self._frame_at = time.time()
-                    self._seq += 1
-                    self.error = None
-                    self._cv.notify_all()
-                if self._viewers == 0 and time.monotonic() - self._last_use > self.cfg["live_idle_seconds"]:
-                    idle = True
-                    break
-        _stop_process(proc)
-        with self._cv:
-            if self._proc is not proc:
-                idle = True  # stop() took it away on purpose
-            else:
-                self._proc = None
-            if not idle:
-                msg = next((x for x in reversed(tail) if x), "") or "the camera stopped sending video"
-                self.error = self._explain(msg)[:200]
-                if not got_frame:
-                    self._failed_at = time.monotonic()
-                log.info("cameras: live feed for %s ended: %s", self.name, self.error)
-            else:
-                log.info("cameras: live feed for %s stopped (nobody watching)", self.name)
-            self._cv.notify_all()
-        if not idle and not got_frame and self.on_failure:
-            self.on_failure()
-
-    # ffmpeg's words for what the Blink proxy answered, in words for the page (and without the URL).
-    PROXY_ERRORS = (("4XX Client Error", "Blink needs about 30 s between live views; try again shortly"),
-                    ("404 Not Found", "the Blink proxy doesn't know this camera (check blink_live)"),
-                    ("401 Unauthorized", "the Blink proxy refused the token (check BLINK_PROXY_TOKEN in .env)"),
-                    ("Connection refused", "the Blink proxy isn't running"),
-                    ("5XX Server Error", "Blink didn't start the live view; try again in a minute"))
-
-    def _explain(self, msg):
-        if not self.url.startswith("http://"):
-            return msg
-        return next((text for key, text in self.PROXY_ERRORS if key in msg), "Blink live view ended: " + msg.split(": ")[-1])
-
-    def status(self):
-        """(available, time.time() of the latest frame or None) for the tablet."""
-        with self._cv:
-            failed = self._failed_at is not None and time.monotonic() - self._failed_at < 60
-            return not failed, (self._frame_at or None)
-
-    def still(self):
-        """The latest frame, starting ffmpeg (and waiting for its first frame) when it isn't running."""
-        deadline = time.monotonic() + self.FIRST_FRAME_SECONDS
-        with self._cv:
-            self._last_use = time.monotonic()
-            fresh = self._proc is not None and self._frame is not None and time.time() - self._frame_at < 5
-            if fresh:
-                return self._frame
-            seq = self._seq
-            if not self._start_locked():
-                raise ActionError(self.error or "camera not answering", 502)
-            while self._seq == seq and self._proc is not None:
-                left = deadline - time.monotonic()
-                if left <= 0:
-                    break
-                self._cv.wait(left)
-            if self._seq == seq:
-                raise ActionError(self.error or "camera not answering", 504)
-            return self._frame
-
-    def frames(self, max_seconds):
-        """Yields JPEG frames for one viewer until max_seconds pass or the camera stops. Raises
-        ActionError on the first next() when the viewer can't be served (start it before replying)."""
-        with self._cv:
-            if self._viewers >= MAX_VIEWERS:
-                raise ActionError("too many live views of this camera", 429)
-            running = self._proc is not None
-            if not self._start_locked():
-                raise ActionError(self.error or "camera not answering", 502)
-            self._viewers += 1
-            # A running feed's latest frame is current; one left from an earlier ffmpeg is not.
-            seq = 0 if running else self._seq
-        end = time.monotonic() + max_seconds
-        try:
-            while True:
-                with self._cv:
-                    while self._seq == seq and self._proc is not None and time.monotonic() < end:
-                        self._cv.wait(min(1.0, max(0.0, end - time.monotonic())))
-                    if self._seq == seq or time.monotonic() >= end:
-                        return
-                    seq, frame = self._seq, self._frame
-                yield frame
-        finally:
-            self._leave()
-
-    def _leave(self):
-        with self._cv:
-            self._viewers -= 1
-            self._last_use = time.monotonic()
-
-    def stop(self):
-        with self._cv:
-            proc, self._proc = self._proc, None
-        if proc:
-            _stop_process(proc)
-
-
 def _with_host(url, ip):
     """The same URL with its host replaced (port and path kept)."""
     parts = urllib.parse.urlsplit(url)
     netloc = ip + (":%d" % parts.port if parts.port else "")
     return urllib.parse.urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
-
-
-def _stop_process(proc):
-    if proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-    for f in (proc.stdout, proc.stderr):
-        try:
-            f.close()
-        except (OSError, ValueError):
-            pass
 
 
 class Cameras:
@@ -431,6 +207,7 @@ class Cameras:
         self._refresh_thread = None
         self._refresh_next = {}   # id -> clock() time of the next background snapshot
         self._refresh_fails = {}  # id -> consecutive failures (backoff)
+        self.last_person_move = {}  # id -> time.monotonic() of the last pan/tilt step from the tablet/assistant
 
     def _blink_url(self, cam):
         # The proxy ends its session after `seconds` whatever happens; a little longer than one viewer may watch.
@@ -439,7 +216,7 @@ class Cameras:
                                                   int(self.cfg["live_max_seconds"]) + 60)
 
     def _blink_token_from_env(self):
-        key, _problem = assistant.load_api_key(self.home.env_path, (self.cfg["blink_proxy_token_name"],))
+        key, _problem = envfile.load_api_key(self.home.env_path, (self.cfg["blink_proxy_token_name"],))
         return key
 
     def _blink_headers(self):
@@ -548,6 +325,14 @@ class Cameras:
         feeds = self._hd_feeds if hd and cid in self._hd_feeds else self._feeds
         return feeds[cid].frames(self.cfg["live_max_seconds"])
 
+    def still(self, cid, hd=True):
+        """The latest JPEG of an RTSP camera (HD when it has it), starting its feed if needed."""
+        self._camera(cid)
+        feeds = self._hd_feeds if hd and cid in self._hd_feeds else self._feeds
+        if cid not in feeds:
+            raise ActionError("this camera has no live view", 404)
+        return feeds[cid].still()
+
     def live_error(self, cid, hd=False):
         feed = (self._hd_feeds if hd else self._feeds).get(cid) or self._feeds.get(cid) or self._blink_feeds.get(cid)
         return feed.error if feed else None
@@ -636,7 +421,7 @@ class Cameras:
             if now < self._refresh_next.get(cid, 0.0):
                 continue
             try:
-                self.request_snapshot(cid)
+                self.request_snapshot(cid, background=True)
             except ActionError as exc:
                 if exc.code == 429:  # someone pressed New snapshot recently: that counts
                     self._refresh_next[cid] = now + every
@@ -726,11 +511,14 @@ class Cameras:
                 self._onvif_failed(cid, exc)
         return out
 
-    def move(self, cid, direction):
-        """One short pan/tilt step: left, right, up or down."""
+    def move(self, cid, direction, by_person=True):
+        """One short pan/tilt step: left, right, up or down. by_person=False for automations (laundry.py),
+        which watch last_person_move to stay out of the way of someone using the camera."""
         cam = self._control(cid, "ptz")
         if direction not in onvif.DIRECTIONS:
             raise ActionError("move must be left, right, up or down", 400)
+        if by_person:
+            self.last_person_move[cid] = time.monotonic()
         try:
             cam.step(direction, self.PTZ_SPEED, self.PTZ_STEP_SECONDS)
         except onvif.OnvifError as exc:
@@ -751,7 +539,7 @@ class Cameras:
         log.info("cameras: %s set to %s mode", cid, mode)
         return {"ok": True, "mode": mode}
 
-    def request_snapshot(self, cid):
+    def request_snapshot(self, cid, background=False):
         """Ask the camera for a new picture (wakes it), then refresh HA's copy in the background."""
         cam = self._camera(cid)
         if cid in self._feeds or not cam.get("snapshot", True):
@@ -764,7 +552,8 @@ class Cameras:
                 raise ActionError("wait %d s before another snapshot of this camera" % (wait + 0.999), 429)
             self._snapped[cid] = now
         self.home.ha_service(cam.get("snapshot_service", "blink.trigger_camera"), cam["entity_id"])
-        log.info("cameras: new snapshot requested for %s", cid)
+        # The background refresh asks every minute per camera: keep it out of the INFO log.
+        log.log(logging.DEBUG if background else logging.INFO, "cameras: new snapshot requested for %s", cid)
 
         def refresh():
             # Blink stores the new picture in its cloud; HA picks it up on its next update.

@@ -6,7 +6,7 @@ OpenAI-compatible transcription endpoint, and returns the text. Nothing is kept:
 files are deleted immediately, and audio, transcripts and the key are never logged.
 
 Python 3 standard library plus the ffmpeg binary already on this server. Usage limits reuse
-assistant.UsageStore (thread lock + flock, persisted), with their own counters and log.
+usage.UsageStore (thread lock + flock, persisted), with their own counters and log.
 """
 import json
 import logging
@@ -23,8 +23,12 @@ import urllib.request
 import uuid
 
 import assistant as am
+import envfile
 import fallback as fb
 import netsim
+from upstream import NoRedirect, UpstreamError, post_bounded
+from usage import UsageStore, fmt_wait
+from util import now_ms, num as _num
 
 log = logging.getLogger("dashboard.voice")
 
@@ -93,11 +97,11 @@ def validate_voice_config(v):
             raise ValueError("voice.%s must be an integer %d-%d" % (key, lo, hi))
     for key, lo, hi in (("min_interval_seconds", 0, 3600), ("timeout_seconds", 1, 120),
                         ("ffmpeg_timeout_seconds", 1, 120), ("no_speech_threshold", 0, 1)):
-        if not am._num(v[key]) or not lo <= v[key] <= hi:
+        if not _num(v[key]) or not lo <= v[key] <= hi:
             raise ValueError("voice.%s must be a number %s-%s" % (key, lo, hi))
-    if v["price_per_hour_usd"] is not None and (not am._num(v["price_per_hour_usd"]) or v["price_per_hour_usd"] < 0):
+    if v["price_per_hour_usd"] is not None and (not _num(v["price_per_hour_usd"]) or v["price_per_hour_usd"] < 0):
         raise ValueError("voice.price_per_hour_usd must be a non-negative number or null")
-    if not am._num(v["total_timeout_seconds"]) or not 5 <= v["total_timeout_seconds"] <= 300:
+    if not _num(v["total_timeout_seconds"]) or not 5 <= v["total_timeout_seconds"] <= 300:
         raise ValueError("voice.total_timeout_seconds must be a number 5-300")
     am.validate_fallback_config(v, "voice")
 
@@ -203,15 +207,15 @@ def encode_multipart(fields, filename, content, content_type):
 
 
 class Transcriber:
-    def __init__(self, cfg, tz, base_dir, clock=am.now_ms):
+    def __init__(self, cfg, tz, base_dir, clock=now_ms):
         self.cfg = cfg
         self.base_dir = base_dir
         self.clock = clock
         self.env_path = os.path.join(base_dir, cfg["env_file"])
-        self.store = am.UsageStore(os.path.join(base_dir, cfg["state_file"]),
+        self.store = UsageStore(os.path.join(base_dir, cfg["state_file"]),
                                    os.path.join(base_dir, cfg["usage_log"]), tz, clock)
         self._inflight = threading.Lock()
-        self._opener = urllib.request.build_opener(am._NoRedirect)
+        self._opener = urllib.request.build_opener(NoRedirect)
         self._cloud = fb.HeaderDeadlineOpener(self._opener, "voice")
         self.gate = fb.CloudGate(cfg["cloud_cooldown_seconds"])
         self._warned = set()
@@ -228,14 +232,14 @@ class Transcriber:
                 "max_per_day": c["max_per_day"], "noun": "recordings"}
 
     def _key(self):
-        key, problem = am.load_api_key(self.env_path, KEY_NAMES)
+        key, problem = envfile.load_api_key(self.env_path, KEY_NAMES)
         if problem and problem not in self._warned:
             self._warned.add(problem)
             log.warning("voice: Groq API key not usable (%s); see README", problem)
         return key, problem
 
     def status(self):
-        key, problem = am.load_api_key(self.env_path, KEY_NAMES)
+        key, problem = envfile.load_api_key(self.env_path, KEY_NAMES)
         out = {"enabled": self.cfg["enabled"], "auto_ask": self.cfg["auto_ask"],
                "configured": key is not None, "setup_problem": problem,
                "model": self.cfg["model"], "max_audio_seconds": self.cfg["max_audio_seconds"],
@@ -306,7 +310,7 @@ class Transcriber:
                 responded = False
                 entry["api_wait_ms"] = int((time.monotonic() - t0) * 1000)
                 return self._transcribe_locally(wav, entry, started, remaining, request_deadline, skipped=False)
-            except am.UpstreamError as exc:
+            except UpstreamError as exc:
                 entry.update({"outcome": exc.category, "http_status": exc.http_status,
                               "duration_ms": self.clock() - started})
                 self._log_outcome(entry)
@@ -339,7 +343,7 @@ class Transcriber:
         else:
             try:
                 result = self._call_local(wav, deadline)
-            except am.UpstreamError as exc:
+            except UpstreamError as exc:
                 failure = exc.category
             except Exception:  # defensive, as for the cloud call
                 log.error("voice: unexpected local fallback failure (details withheld)")
@@ -378,7 +382,7 @@ class Transcriber:
         if cat == "provider_rate_limited":
             wait = exc.retry_after or 30
             return self._err(429, "provider_busy", "The speech service is busy. Try again in about %s."
-                             % am._fmt_wait(wait), wait)
+                             % fmt_wait(wait), wait)
         if cat == "timeout":
             return self._err(504, "timeout", "The speech service took too long. Try again.")
         if cat == "network_error":
@@ -397,7 +401,7 @@ class Transcriber:
             headers={"Authorization": "Bearer " + key, "Content-Type": ctype, "Accept": "application/json",
                      "User-Agent": "TabletDashboard-voice"})
         no_response = self.cfg["no_response_seconds"] if self.cfg["fallback_enabled"] else None
-        return self._parse(am.post_bounded(self._opener, self._cloud, req, timeout,
+        return self._parse(post_bounded(self._opener, self._cloud, req, timeout,
                                            self.cfg["max_response_bytes"], no_response))
 
     def _call_local(self, wav, deadline):
@@ -409,23 +413,23 @@ class Transcriber:
             self.cfg["fallback_base_url"].rstrip("/") + "/inference", data=body, method="POST",
             headers={"Content-Type": ctype, "Accept": "application/json", "User-Agent": "TabletDashboard-voice"})
         timeout = max(0.1, deadline - time.monotonic())
-        return self._parse(am.post_bounded(self._opener, None, req, timeout, self.cfg["max_response_bytes"]))
+        return self._parse(post_bounded(self._opener, None, req, timeout, self.cfg["max_response_bytes"]))
 
     def _parse(self, raw):
         try:
             data = json.loads(raw.decode("utf-8"))
             text = data["text"]
         except (UnicodeDecodeError, ValueError, KeyError, TypeError):
-            raise am.UpstreamError("bad_response", 200)
+            raise UpstreamError("bad_response", 200)
         if not isinstance(text, str):
-            raise am.UpstreamError("bad_response", 200)
+            raise UpstreamError("bad_response", 200)
         text = " ".join(text.split())  # collapse whitespace/newlines; this fills a one-question box
         # Pure punctuation (Whisper returns "." for a tone or noise) is not speech.
         no_speech = not re.search(r"\w", text)
         segments = data.get("segments")
         if text and isinstance(segments, list):
             probs = [s.get("no_speech_prob") for s in segments
-                     if isinstance(s, dict) and am._num(s.get("no_speech_prob"))]
+                     if isinstance(s, dict) and _num(s.get("no_speech_prob"))]
             # Whisper invents text ("Thank you.") for silence; if every segment looks like non-speech, drop it.
             if probs and min(probs) > self.cfg["no_speech_threshold"]:
                 no_speech = True

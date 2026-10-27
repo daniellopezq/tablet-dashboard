@@ -29,6 +29,8 @@ import health as health_mod
 import home as home_mod
 import homeai
 import httpcore
+import laundry as laundry_mod
+import away as away_mod
 import localai as localai_mod
 import maps as maps_mod
 import netsim
@@ -41,7 +43,7 @@ from config import BASE_DIR, DEFAULT_CONFIG, ConfigError, load_config, validate_
 from httpcore import MEDIA_TYPES, STATIC_TYPES, parse_range, resolve_under  # noqa: F401
 from weather import WeatherService
 
-VERSION = "0.25.1"
+VERSION = "0.30.1"
 USER_AGENT = "TabletDashboard/%s (personal home dashboard)" % VERSION
 
 log = logging.getLogger("dashboard")
@@ -56,7 +58,7 @@ class App:
         self.media_root = os.path.realpath(os.path.join(BASE_DIR, cfg["media_dir"]))
         self.weather = WeatherService(cfg["weather"], USER_AGENT)
         self.db = pgstore.Database(cfg["database"])
-        self.weather.on_update = lambda data: self.db.record_weather(cfg["weather"]["label"], data)
+        self.weather.on_update = self._weather_updated
         self.assistant = assistant_mod.Assistant(cfg["assistant"], self.tz, BASE_DIR)
         self.voice = voice_mod.Transcriber(cfg["voice"], self.tz, BASE_DIR)
         w = cfg["weather"]
@@ -68,6 +70,9 @@ class App:
                                             load_config, VERSION)
         self.health = health_mod.HealthChecker(cfg["health"], cfg["kuma"], BASE_DIR, self.admin.builtin_checks)
         self.home = home_mod.Home(cfg["home"], BASE_DIR)
+        self.away = away_mod.AwayMode(cfg["away"], self.home, BASE_DIR,
+                                      localtime=lambda t: datetime.fromtimestamp(t, self.tz).timetuple())
+        self.home.away = self.away
         self.health.stopped_hint = self.home.intentionally_stopped
         self.cameras = cameras_mod.Cameras(cfg["cameras"], self.home)
         google_tts = googletts.GoogleTTS(cfg["tts"], os.path.join(BASE_DIR, cfg["tts"]["google_key_file"]),
@@ -78,6 +83,11 @@ class App:
         self.assistant.house = homeai.House(self.home, self.cameras, weather=self.weather.snapshot,
                                             history=self.db.weather_summary)
         self.speaker.set_phrases(self.assistant.house.speech_phrases)
+        self.laundry = laundry_mod.LaundryWatch(cfg["laundry"], self.cameras, self.home, BASE_DIR, self.speaker)
+
+    def _weather_updated(self, data):
+        self.db.record_weather(self.cfg["weather"]["label"], data)
+        self.laundry.on_weather(data)
 
     def check(self):
         problems = []
@@ -152,10 +162,10 @@ class DashboardServer(ThreadingHTTPServer):
 
     def handle_error(self, request, client_address):
         # TLS handshakes from browsers that reject the self-signed certificate, and dropped
-        # connections, are routine: log one line instead of a traceback.
+        # connections, are routine: one DEBUG line instead of a traceback.
         exc = sys.exc_info()[1]
         if isinstance(exc, (ssl.SSLError, ConnectionError, TimeoutError)):
-            log.info("%s connection ended: %s", client_address[0], type(exc).__name__)
+            log.debug("%s connection ended: %s", client_address[0], type(exc).__name__)
             return
         super().handle_error(request, client_address)
 
@@ -234,6 +244,7 @@ def main(argv=None):
     app.calendar.start()
     app.health.start()
     app.speaker.start_bank()
+    app.away.start()
     if httpsd:
         threading.Thread(target=httpsd.serve_forever, name="https", daemon=True).start()
         log.info("dashboard https listening on %s:%d", cfg["bind"], cfg["https_port"])
@@ -247,6 +258,7 @@ def main(argv=None):
         app.maps.stop()
         app.calendar.stop()
         app.health.stop()
+        app.away.stop()
         app.cameras.close()
         if httpsd:
             httpsd.shutdown()

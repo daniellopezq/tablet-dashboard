@@ -22,7 +22,9 @@
     "min_interval_seconds": 10,
     "max_per_hour": 20,
     "max_per_day": 100,
-    "allowed_hosts": []
+    "allowed_hosts": [],
+    "_trusted_ips": "Exact addresses of your own remote devices (e.g. Tailscale 100.x) treated like home-network clients. Never a range. The admin page ignores it.",
+    "trusted_ips": []
   },
   "maps": {
     "_comment": "Weather map slideshow (Maps tab + small card on the Weather tab). See README. Key is in .env.",
@@ -119,6 +121,25 @@
         "entity_id": "alarm_control_panel.home",
         "state_entity": "alarm_control_panel.home",
         "confirm": true
+      },
+      {
+        "id": "away",
+        "aliases": ["away mode", "modo fuera"],
+        "label": "Away mode",
+        "kind": "away",
+        "icon": "home"
+      },
+      {
+        "id": "garage",
+        "_comment": "Read-only tile (kind sensor): shows a Home Assistant state, warns after warn_minutes on. See README, Home tab.",
+        "aliases": ["garage", "garaje"],
+        "label": "Garage",
+        "kind": "sensor",
+        "icon": "garage",
+        "state_entity": "input_boolean.garage_open",
+        "words": {"on": "Open", "off": "Closed"},
+        "words_es": {"on": "abierto", "off": "cerrado"},
+        "warn_minutes": 15
       }
     ]
   },
@@ -158,6 +179,21 @@
         "live_fps": 10
       }
     ]
+  },
+  "away": {
+    "_comment": "Away mode (away.py): after sunset, room lights take turns, short lights get brief visits, all off at a random bedtime. Switch it with an 'away' Home button or by voice.",
+    "enabled": true,
+    "lights": [
+      {"entity_id": "light.living_room_lamp", "label": "Living room", "role": "room"},
+      {"entity_id": "light.bedroom", "label": "Bedroom", "role": "room"},
+      {"entity_id": "light.bathroom", "label": "Bathroom", "role": "short"}
+    ]
+  },
+  "laundry": {
+    "_comment": "Laundry check (laundry.py), off by default: needs an RTSP camera with ONVIF pan/tilt, a movement recipe and a reference picture per clothesline. See README.",
+    "enabled": false,
+    "notify_services": [],
+    "lines": []
   },
   "database": {
     "_comment": "Optional history in a local PostgreSQL through the psql client (peer login, no password; setup in pgstore.py). Off by default.",

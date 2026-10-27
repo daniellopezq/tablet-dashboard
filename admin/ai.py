@@ -6,9 +6,11 @@ import urllib.error
 import urllib.request
 
 import assistant as assistant_mod
+import envfile
 import localai as localai_mod
 import netsim
 import voice as voice_mod
+from upstream import NoRedirect
 
 from .core import AI_KEYS, ApiError, _clean_err, coerce, log, _tail
 
@@ -37,7 +39,7 @@ class AIMixin:
                "offline_test": netsim.SIM.state() if netsim.SIM else {"active": False}}
         for sid, svc, keynames in (("assistant", a.assistant, (assistant_mod.KEY_ENV,)),
                                    ("voice", a.voice, voice_mod.KEY_NAMES)):
-            key, problem = assistant_mod.load_api_key(svc.env_path, keynames)
+            key, problem = envfile.load_api_key(svc.env_path, keynames)
             c = svc.cfg
             out[sid] = {"settings": {k: c[k] for k in AI_KEYS[sid]}, "base_url": c["base_url"],
                         "configured": key is not None, "problem": problem,
@@ -49,7 +51,7 @@ class AIMixin:
     def _fetch_models(self, base_url, key):
         req = urllib.request.Request(base_url.rstrip("/") + "/models", headers={
             "Authorization": "Bearer " + key, "Accept": "application/json", "User-Agent": "TabletDashboard-admin"})
-        opener = urllib.request.build_opener(assistant_mod._NoRedirect)
+        opener = urllib.request.build_opener(NoRedirect)
         try:
             with opener.open(req, timeout=10) as resp:
                 raw = resp.read(4 * 1024 * 1024 + 1)
@@ -72,7 +74,7 @@ class AIMixin:
         if cached and time.time() - cached[0] < 3600 and not data.get("force"):
             return {"ok": True, "models": cached[1]}
         svc = self.app.assistant if sid == "assistant" else self.app.voice
-        key, problem = assistant_mod.load_api_key(
+        key, problem = envfile.load_api_key(
             svc.env_path, (assistant_mod.KEY_ENV,) if sid == "assistant" else voice_mod.KEY_NAMES)
         if not key:
             raise ApiError(409, "Set the API key first (%s)." % problem)
@@ -113,7 +115,7 @@ class AIMixin:
         """One real cloud call, outside the usage limits (but recorded in the usage log)."""
         svc = self.app.assistant if sid == "assistant" else self.app.voice
         names = (assistant_mod.KEY_ENV,) if sid == "assistant" else voice_mod.KEY_NAMES
-        key, problem = assistant_mod.load_api_key(svc.env_path, names)
+        key, problem = envfile.load_api_key(svc.env_path, names)
         if not key:
             return {"ok": False, "error": "API key: %s" % problem}
         t0 = time.monotonic()

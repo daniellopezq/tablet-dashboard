@@ -21,7 +21,10 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import assistant as am  # noqa: E402
+import envfile  # noqa: E402
+import httpcore  # noqa: E402
 import server  # noqa: E402
+import usage  # noqa: E402
 from test_server import DashboardTestCase, start_thread_server  # noqa: E402
 
 FAKE_KEY = "FAKEKEY-abc123XYZ456"
@@ -353,7 +356,25 @@ class OriginTests(AssistantTestCase):
                        ("::1", True), ("::ffff:192.168.1.5", True), ("fe80::1%eth0", True),
                        ("8.8.8.8", False), ("100.64.0.1", False), ("2606:4700:4700::1111", False),
                        ("junk", False)):
-            self.assertEqual(am.is_lan_client(ip), ok, ip)
+            self.assertEqual(httpcore.is_lan_client(ip), ok, ip)
+
+    def test_trusted_ips_are_exact_addresses(self):
+        trusted = ["100.101.102.103"]
+        self.assertTrue(httpcore.is_lan_client("100.101.102.103", trusted))
+        self.assertTrue(httpcore.is_lan_client("::ffff:100.101.102.103", trusted))
+        self.assertFalse(httpcore.is_lan_client("100.101.102.104", trusted))  # same Tailscale range, not listed
+        self.assertFalse(httpcore.is_lan_client("100.101.102.103"))
+        self.assertTrue(httpcore.is_lan_client("192.168.1.60", trusted))
+
+    def test_trusted_ips_validation(self):
+        for bad in ("100.64.0.0/10", "0.0.0.0", "myhost", 5, None):
+            with self.subTest(bad=bad):
+                cfg = dict(am.DEFAULT_ASSISTANT_CONFIG, trusted_ips=[bad])
+                with self.assertRaises(ValueError):
+                    am.validate_assistant_config(cfg)
+        with self.assertRaises(ValueError):
+            am.validate_assistant_config(dict(am.DEFAULT_ASSISTANT_CONFIG, trusted_ips="100.101.102.103"))
+        am.validate_assistant_config(dict(am.DEFAULT_ASSISTANT_CONFIG, trusted_ips=["100.101.102.103", "fd7a::1"]))
 
 
 class KeyHandlingTests(AssistantTestCase):
@@ -384,7 +405,7 @@ class KeyHandlingTests(AssistantTestCase):
         real = os.path.join(self.dir, "real.env")
         os.rename(self.env_path, real)
         os.symlink(real, self.env_path)
-        self.assertEqual(am.load_api_key(self.env_path), (None, "insecure_file"))
+        self.assertEqual(envfile.load_api_key(self.env_path, (am.KEY_ENV,)), (None, "insecure_file"))
 
     def test_environment_variable_wins(self):
         os.remove(self.env_path)
@@ -502,7 +523,7 @@ class ConcurrencyAndLimitTests(AssistantTestCase):
         self.assertEqual(len(self.state()["attempts"]), 1)  # the rejected one consumed no quota
 
     def test_store_is_safe_under_many_threads(self):
-        store = am.UsageStore(self.state_path, self.usage_path, TZ)
+        store = usage.UsageStore(self.state_path, self.usage_path, TZ)
         limits = {"min_interval_seconds": 0, "max_per_hour": 5, "max_per_day": 100}
         allowed = []
         barrier = threading.Barrier(20)
@@ -618,8 +639,10 @@ class SecretHygieneTests(AssistantTestCase):
         html = self.request(port, "/", headers=tablet)[1]
         self.assertIn(b"view-assistant", html)
         self.assertIn("Also controls the house".encode(), html)
-        with open(os.path.join(app.web_root, "app.js")) as f:
-            js = f.read()
+        js = ""
+        for name in sorted(os.listdir(os.path.join(app.web_root, "js"))):
+            with open(os.path.join(app.web_root, "js", name)) as f:
+                js += f.read()
         self.assertNotIn("fetch(", js)
         self.assertNotIn("innerHTML = data", js)
 

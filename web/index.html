@@ -237,6 +237,8 @@
     </section>
 
     <div class="toast is-hidden" id="toast"></div>
+    <div class="laundry-banner is-hidden" id="laundry-banner"></div>
+    <div class="laundry-banner hc-alert is-hidden" id="hc-alert"></div>
 
     <div class="diag col is-hidden" id="diag">
       <div class="diag-head row">
@@ -301,6 +303,16 @@
   </div>
 </div>
 <noscript><div class="noscript">JavaScript is required for the dashboard.</div></noscript>
-<script src="app.js"></script>
+<!-- The tablet client, in load order (core first, main last); see web/js/core.js. -->
+<script src="js/core.js"></script>
+<script src="js/weather.js"></script>
+<script src="js/calendar.js"></script>
+<script src="js/assistant.js"></script>
+<script src="js/voice.js"></script>
+<script src="js/home.js"></script>
+<script src="js/cameras.js"></script>
+<script src="js/uptime.js"></script>
+<script src="js/maps.js"></script>
+<script src="js/main.js"></script>
 </body>
 </html>

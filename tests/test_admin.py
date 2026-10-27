@@ -18,8 +18,9 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import admin  # noqa: E402
-import assistant as assistant_mod  # noqa: E402
+import httpcore  # noqa: E402
 import gcal  # noqa: E402
+import gcal_auth  # noqa: E402
 import netsim  # noqa: E402
 import server  # noqa: E402
 from test_server import DashboardTestCase, start_thread_server  # noqa: E402
@@ -129,10 +130,16 @@ class AccessTests(AdminTestCase):
         self.assertIn("frame-ancestors 'none'", resp.getheader("Content-Security-Policy"))
 
     def test_not_served_to_non_lan_clients(self):
-        with mock.patch.object(assistant_mod, "is_lan_client", return_value=False):
+        with mock.patch.object(httpcore, "is_lan_client", return_value=False):
             for path in ("/admin", "/api/admin/session"):
                 with self.subTest(path=path):
                     self.assertEqual(self.call("GET", path)[0].status, 404)
+
+    def test_trusted_ips_do_not_open_admin(self):
+        # A trusted remote device (assistant.trusted_ips) counts as home for the dashboard, never for admin.
+        self.app.assistant.cfg["trusted_ips"] = ["100.101.102.103"]
+        with mock.patch.object(httpcore, "is_lan_client", side_effect=lambda ip, trusted=(): bool(trusted)):
+            self.assertEqual(self.call("GET", "/api/admin/session")[0].status, 404)
 
     def test_needs_session(self):
         for method, route in (("GET", "overview"), ("GET", "keys"), ("POST", "keys/set"), ("POST", "maint")):
@@ -334,7 +341,7 @@ class CalendarTests(AdminTestCase):
                                                           urllib.parse.quote(gcal.SCOPE))
         bad = redirect.replace(q["state"][0], "wrong-state")
         self.assertEqual(self.call("POST", "calendar/finish", {"url": bad})[0].status, 400)
-        with mock.patch.object(gcal, "exchange_code", return_value="1//refresh-token-value") as ex, \
+        with mock.patch.object(gcal_auth, "exchange_code", return_value="1//refresh-token-value") as ex, \
                 mock.patch.object(self.app.calendar, "wake") as wake:
             resp, body = self.call("POST", "calendar/finish", {"url": redirect})
         self.assertEqual(resp.status, 200, body)

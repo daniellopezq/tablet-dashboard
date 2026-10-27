@@ -2,6 +2,7 @@ import { h, replace, card, message, toast } from '../lib/dom.js';
 import { subscribe, current, refresh, refreshSoon } from '../lib/store.js';
 import { getJSON, postJSON } from '../lib/api.js';
 import { ago, formatHM } from '../lib/clock.js';
+import { laundryPanel } from './laundry.js';
 
 // Setting a blank picture (not removing src) is what makes browsers drop an MJPEG connection.
 const BLANK = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
@@ -288,8 +289,10 @@ export default {
     const g = grid(false);
     const status = h('div');
     const foot = h('div');
-    replace(root, h('div', { class: 'view-cameras' }, h('h1', { class: 'view-title' }, 'Cameras'), status, g.el, foot));
-    return subscribe('cameras', (d, err) => {
+    const laundry = laundryPanel();
+    replace(root, h('div', { class: 'view-cameras' }, h('h1', { class: 'view-title' }, 'Cameras'), status, g.el, foot,
+      laundry.el));
+    const unsub = subscribe('cameras', (d, err) => {
       const p = problem(d, err);
       replace(status, p);
       g.el.hidden = !!p;
@@ -297,6 +300,7 @@ export default {
       g.update(d);
       replace(foot, summary(d, err));
     });
+    return () => { unsub(); laundry.stop(); };
   },
 
   card(root) {

@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import gcal  # noqa: E402
+import gcal_auth  # noqa: E402
 
 TZ = ZoneInfo("America/Tijuana")
 CLIENT_ID = "123456-abcdef.apps.googleusercontent.com"
@@ -349,17 +350,17 @@ class RouteTests(unittest.TestCase):
             httpd.server_close()
 
     def test_api_calendar_lan_only(self):
+        import httpcore
         import routes
-        import assistant
-        self.assertFalse(assistant.is_lan_client("8.8.8.8"))  # the route reuses this check
+        self.assertFalse(httpcore.is_lan_client("8.8.8.8"))  # the route reuses this check
         self.assertTrue(routes.GET["/api/calendar"][1])  # marked LAN only in the route table
 
 
 class AuthHelperTests(unittest.TestCase):
     def test_auth_url(self):
-        verifier, challenge = gcal.pkce_pair()
+        verifier, challenge = gcal_auth.pkce_pair()
         self.assertTrue(43 <= len(verifier) <= 128)
-        url = gcal.build_auth_url(CLIENT_ID, "http://127.0.0.1:5555", "st", challenge)
+        url = gcal_auth.build_auth_url(CLIENT_ID, "http://127.0.0.1:5555", "st", challenge)
         q = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
         self.assertEqual(q["code_challenge_method"], ["S256"])
         self.assertEqual(q["access_type"], ["offline"])
@@ -368,14 +369,14 @@ class AuthHelperTests(unittest.TestCase):
 
     def test_parse_redirect(self):
         scope = urllib.parse.quote(gcal.SCOPE)
-        self.assertEqual(gcal.parse_redirect("http://127.0.0.1:5555/?state=st&code=4/abc&scope=" + scope, "st"), "4/abc")
-        self.assertEqual(gcal.parse_redirect("/?state=st&code=4/abc", "st"), "4/abc")
+        self.assertEqual(gcal_auth.parse_redirect("http://127.0.0.1:5555/?state=st&code=4/abc&scope=" + scope, "st"), "4/abc")
+        self.assertEqual(gcal_auth.parse_redirect("/?state=st&code=4/abc", "st"), "4/abc")
         with self.assertRaises(ValueError):
-            gcal.parse_redirect("http://127.0.0.1:5555/?state=other&code=4/abc", "st")
+            gcal_auth.parse_redirect("http://127.0.0.1:5555/?state=other&code=4/abc", "st")
         with self.assertRaises(ValueError):
-            gcal.parse_redirect("http://127.0.0.1:5555/?state=st&error=access_denied", "st")
+            gcal_auth.parse_redirect("http://127.0.0.1:5555/?state=st&error=access_denied", "st")
         with self.assertRaises(ValueError):  # user unticked the calendar box
-            gcal.parse_redirect("http://127.0.0.1:5555/?state=st&code=4/abc&scope=openid", "st")
+            gcal_auth.parse_redirect("http://127.0.0.1:5555/?state=st&code=4/abc&scope=openid", "st")
 
     def test_set_env_values_keeps_other_lines(self):
         d = tempfile.mkdtemp()

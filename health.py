@@ -23,7 +23,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-import assistant as assistant_mod
+import envfile
+from upstream import NoRedirect
+from util import num as _num
 
 log = logging.getLogger("dashboard.health")
 
@@ -57,9 +59,6 @@ PUBLIC_GROUPS = (("Uptime Kuma", "kuma"), ("Services", "service"))  # tablet Upt
 PUBLIC_RECENT = 30
 _MS_RE = re.compile(r"(\d+) ms")
 
-
-def _num(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def _http_url(v):
@@ -141,7 +140,7 @@ def tcp_check(host, port, timeout):
     return "ok", "%d ms" % ((time.monotonic() - t0) * 1000)
 
 
-_opener = urllib.request.build_opener(assistant_mod._NoRedirect)
+_opener = urllib.request.build_opener(NoRedirect)
 
 
 def http_check(url, timeout):
@@ -233,7 +232,7 @@ class KumaClient:
         self.env_path = os.path.join(base_dir, kcfg["env_file"])
 
     def _secret(self, names):
-        val, _ = assistant_mod.load_api_key(self.env_path, names)
+        val, _ = envfile.load_api_key(self.env_path, names)
         return val
 
     def _push_url(self):

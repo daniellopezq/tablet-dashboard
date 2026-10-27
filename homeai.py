@@ -156,7 +156,19 @@ def phrase(key, lang, *args):
     return text % args if args else text
 
 
+def _switchable(button):
+    """True for buttons with an on/off state (not press-only, not the media switch, not read-only sensors)."""
+    return (bool(button.get("state_entity")) and button["kind"] != "sensor") or button["kind"] == "away"
+
+
 def _armed_word(button, lang, on):
+    if button["kind"] == "sensor":
+        words = button.get("words_es" if lang == "es" else "words")
+        return words["on" if on else "off"].lower() if words else None
+    if button["kind"] == "away":
+        if lang == "es":
+            return "activado" if on else "desactivado"
+        return "on" if on else "off"
     if button.get("on_service", "").startswith("alarm_control_panel."):
         if lang == "es":
             return "armada" if on else "desarmada"
@@ -206,11 +218,13 @@ class House:
         """{button id: 'on'|'off'|'plex'|...|None}, or None when Home Assistant is down."""
         out = {}
         buttons = self.buttons()
-        need_ha = any(b["kind"] == "ha" and b.get("state_entity") for b in buttons)
+        need_ha = any(b["kind"] in ("ha", "sensor") and b.get("state_entity") for b in buttons)
         states = self.home.ha_states() if need_ha else {}
         for b in buttons:
             if b["kind"] == "media_switch":
                 out[b["id"]] = self.home.media_status()["current"]
+            elif b["kind"] == "away":
+                out[b["id"]] = self.home.button_state(b)
             elif states is None:
                 out[b["id"]] = None
             else:
@@ -225,6 +239,10 @@ class House:
         for b in self.buttons():
             kind = "media switch Plex/Jellyfin" if b["kind"] == "media_switch" else (
                 "alarm" if b.get("on_service", "").startswith("alarm_control_panel.") else
+                "away mode: random lights after dark while nobody is home" if b["kind"] == "away" else
+                "read-only status, can't be switched%s" % (
+                    " (on = %s, off = %s)" % (b["words"]["on"], b["words"]["off"]) if b.get("words") else "")
+                if b["kind"] == "sensor" else
                 "on/off" if b.get("state_entity") else "press only")
             extra = ", needs confirmation" if b.get("confirm") else ""
             also = (" also called: " + ", ".join(b["aliases"])) if b.get("aliases") else ""
@@ -306,6 +324,8 @@ class House:
             return None
         if len(found) > 1 and not re.search(_AND, text):
             return None
+        if any(b["kind"] == "sensor" for b in found):
+            return {"type": "state", "ids": [b["id"] for b in found]}  # "abre el garaje": say its state, never act
         actions = []
         for b in found:
             if b["kind"] == "media_switch":
@@ -314,7 +334,7 @@ class House:
                 actions.append((b["id"], verb))
             elif verb in MEDIA:
                 return None
-            elif b.get("state_entity"):
+            elif _switchable(b):
                 actions.append((b["id"], verb))
             else:
                 actions.append((b["id"], "press"))
@@ -343,18 +363,18 @@ class House:
         if not ha_ok:
             return phrase("ha_down", lang)
         on = [buttons[bid]["label"] for bid, st in states.items()
-              if st == "on" and buttons[bid]["kind"] == "ha"]
+              if st == "on" and buttons[bid]["kind"] in ("ha", "away")]
         return phrase("are_on", lang, ", ".join(on)) if on else phrase("nothing_on", lang)
 
     def valid_action(self, bid, want):
         b = self.home.button(bid) if self.home.cfg["enabled"] else None
-        if b is None:
+        if b is None or b["kind"] == "sensor":
             return None
         if b["kind"] == "media_switch":
             return (bid, want if want in MEDIA else "press")
         if want not in ("on", "off", "press"):
             return None
-        if want != "press" and not b.get("state_entity"):
+        if want != "press" and not _switchable(b):
             want = "press"
         return (bid, want)
 
@@ -409,6 +429,9 @@ class House:
         if b.get("on_service", "").startswith("alarm_control_panel.") and want in ("on", "off"):
             verb = {"on": ("Armar", "Arm"), "off": ("Desarmar", "Disarm")}[want]
             return "%s %s" % (verb[0] if lang == "es" else verb[1], b["label"])
+        if b["kind"] == "away" and want in ("on", "off"):
+            verb = {"on": ("Activar", "Turn on"), "off": ("Desactivar", "Turn off")}[want]
+            return "%s %s" % (verb[0] if lang == "es" else verb[1], b["label"])
         if want == "press":
             return ("Presionar %s" if lang == "es" else "Press %s") % b["label"]
         verb = {"on": ("Prender", "Turn on"), "off": ("Apagar", "Turn off")}[want]
@@ -431,7 +454,7 @@ class House:
                     continue
                 wants = ["press"]
                 out += [phrase("press", lang, label), phrase("state_unknown", lang, label)]
-                if b.get("state_entity"):
+                if _switchable(b):
                     wants += ["on", "off"]
                     out += [phrase(k, lang, label) for k in ("already_on", "already_off")]
                     for on in (True, False):

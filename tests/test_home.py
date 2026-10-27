@@ -58,6 +58,7 @@ class FakeSystem:
 class MockHA(BaseHTTPRequestHandler):
     calls = []
     states = {"switch.desk_lamp": "off"}
+    changed = {}  # entity_id -> last_changed, for the ones a test cares about
 
     def _auth(self):
         if self.headers.get("Authorization") != "Bearer " + TOKEN:
@@ -71,7 +72,8 @@ class MockHA(BaseHTTPRequestHandler):
         if self.path == "/api/":
             return self._send(200, b'{"message":"API running."}')
         if self.path == "/api/states":
-            rows = [{"entity_id": k, "state": v} for k, v in MockHA.states.items()]
+            rows = [dict({"entity_id": k, "state": v}, **({"last_changed": MockHA.changed[k]} if k in MockHA.changed else {}))
+                    for k, v in MockHA.states.items()]
             return self._send(200, json.dumps(rows).encode())
         ent = self.path.rsplit("/", 1)[-1]
         if self.path.startswith("/api/states/") and ent in MockHA.states:
@@ -254,6 +256,7 @@ class HomeAssistantTests(unittest.TestCase):
         os.close(fd)
         MockHA.calls[:] = []
         MockHA.states = {"switch.desk_lamp": "off"}
+        MockHA.changed = {}
         self.clock = FakeClock()
         self.buttons = [
             {"id": "lamp", "label": "Desk lamp", "kind": "ha", "service": "switch.toggle",
@@ -285,6 +288,36 @@ class HomeAssistantTests(unittest.TestCase):
         h = self.make()
         self.assertEqual(h.status()["buttons"][0]["state"], "missing")
         self.assertEqual(h.test_connection(), {"ok": True, "message": "API running."})
+
+    def test_sensor_tile_is_read_only_and_warns(self):
+        # The garage: MyQ notifications -> input_boolean in HA; the tile only shows it.
+        self.buttons.append({"id": "garage", "label": "Garaje", "kind": "sensor", "icon": "garage",
+                             "state_entity": "input_boolean.garage_open", "warn_minutes": 15,
+                             "words": {"on": "Open", "off": "Closed"}, "words_es": {"on": "abierto", "off": "cerrado"}})
+        MockHA.states["input_boolean.garage_open"] = "on"
+        MockHA.changed["input_boolean.garage_open"] = "1970-01-12T13:36:40+00:00"  # 1,000,000 s - 10 min
+        h = self.make()
+        g = h.status()["buttons"][-1]
+        self.assertEqual((g["state"], g["since_ms"], g["words"]["on"], g["warn"]), ("on", 999_400_000, "Open", False))
+        self.clock.t += 5 * 60  # 15 min open
+        h._ha_cache = (0, None, False)
+        self.assertTrue(h.status()["buttons"][-1]["warn"])
+        for call in (lambda: h.action("garage"), lambda: h.set_state("garage", "off")):
+            with self.assertRaises(home.ActionError) as cm:
+                call()
+            self.assertEqual(cm.exception.code, 400)
+        self.assertEqual(MockHA.calls, [])
+        MockHA.states["input_boolean.garage_open"] = "off"
+        h._ha_cache = (0, None, False)
+        self.assertFalse(h.status()["buttons"][-1]["warn"])
+
+    def test_sensor_validation(self):
+        good = {"id": "garage", "label": "Garaje", "kind": "sensor", "state_entity": "input_boolean.g"}
+        home.validate_button(dict(good))
+        for bad in ({"state_entity": None}, {"service": "switch.toggle"}, {"words": {"on": "Open"}},
+                    {"warn_minutes": 0}, {"words_es": {"on": "x" * 13, "off": "y"}}):
+            with self.assertRaises(ValueError, msg=str(bad)):
+                home.validate_button(dict(good, **bad))
 
     def test_script_call(self):
         h = self.make()

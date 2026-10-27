@@ -208,7 +208,7 @@ class RoutesTable(DashboardTestCase):
                      "/api/cameras/x/live.mjpg", "/api/tts/AAAAAAAAAAAAAAAAAAAAAAAA.wav"]
         posts = ["/api/assistant", "/api/assistant/confirm", "/api/transcribe", "/api/home/action", "/api/cameras/snapshot",
                  "/api/cameras/control"]
-        with mock.patch("assistant.is_lan_client", return_value=False):
+        with mock.patch("httpcore.is_lan_client", return_value=False):
             for path in get_paths:
                 with self.subTest(path=path):
                     resp, body = self.request(http_port, path)

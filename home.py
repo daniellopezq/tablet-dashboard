@@ -7,6 +7,7 @@ Two kinds of button, listed under "home" -> "buttons" in config.json:
   ha            call a Home Assistant service, e.g. script.turn_on for script.movie_night. The
                 automations themselves live in HA; this only presses the button. The HA token is
                 read from .env (HA_TOKEN, or the name in home.ha_token_name), never from config.json.
+  away          switch away mode (away.py: random lights after dark) on or off; at most one.
 
 Both work without the internet (LAN only), which is when Jellyfin is wanted.
 
@@ -21,8 +22,11 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime
 
-import assistant as assistant_mod
+import envfile
+from util import num as _num
+
 
 log = logging.getLogger("dashboard.home")
 
@@ -46,7 +50,7 @@ ID_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
 ENTITY_RE = re.compile(r"^[a-z_]+\.[a-z0-9_]{1,128}$")
 SERVICE_RE = re.compile(r"^[a-z_]+\.[a-z0-9_]{1,64}$")
 ICON_RE = re.compile(r"^[a-z0-9-]{1,32}$")
-KINDS = ("media_switch", "ha")
+KINDS = ("media_switch", "ha", "away", "sensor")  # sensor: a read-only state tile (e.g. the garage)
 # States that count as "on" when a button has on_service/off_service (e.g. a Blink alarm panel).
 ON_STATES = ("on", "armed_away", "armed_home", "armed_night", "armed_vacation", "armed_custom_bypass",
              "arming", "triggered", "open", "playing")
@@ -54,9 +58,6 @@ MAX_BUTTONS = 24
 STATUS_TTL = 5
 MAX_ALIASES = 8
 
-
-def _num(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def validate_aliases(owner, aliases):
@@ -78,13 +79,15 @@ def validate_button(b):
     if not isinstance(label, str) or not 1 <= len(label) <= 40:
         raise ValueError("home button %r: label must be 1-40 characters" % bid)
     if b.get("kind") not in KINDS:
-        raise ValueError("home button %r: kind must be media_switch or ha" % bid)
+        raise ValueError("home button %r: kind must be media_switch, ha, away or sensor" % bid)
     if not isinstance(b.get("confirm", False), bool):
         raise ValueError("home button %r: confirm must be true or false" % bid)
     if "icon" in b and not (isinstance(b["icon"], str) and ICON_RE.match(b["icon"])):
         raise ValueError("home button %r: icon must be a short name like 'light'" % bid)
     if "aliases" in b:
         validate_aliases("home button %r" % bid, b["aliases"])
+    if b["kind"] == "sensor":
+        _validate_sensor(b, bid)
     if b["kind"] == "ha":
         pair = "on_service" in b or "off_service" in b
         if pair:
@@ -103,6 +106,33 @@ def validate_button(b):
         se = b.get("state_entity")
         if se is not None and not (isinstance(se, str) and ENTITY_RE.match(se)):
             raise ValueError("home button %r: state_entity must look like switch.desk_lamp" % bid)
+
+
+def _validate_sensor(b, bid):
+    """kind "sensor": shows state_entity, can't be pressed. Optional words for on/off (tile, then the
+    assistant's Spanish), and warn_minutes: amber tile plus a banner once it has been "on" that long."""
+    se = b.get("state_entity")
+    if not (isinstance(se, str) and ENTITY_RE.match(se)):
+        raise ValueError("home button %r: a sensor needs state_entity like input_boolean.garage_open" % bid)
+    for key in ("service", "on_service", "off_service", "entity_id"):
+        if key in b:
+            raise ValueError("home button %r: a sensor only shows a state; remove %s" % (bid, key))
+    for key in ("words", "words_es"):
+        w = b.get(key)
+        if w is not None and not (isinstance(w, dict) and set(w) == {"on", "off"}
+                                  and all(isinstance(v, str) and 1 <= len(v) <= 12 for v in w.values())):
+            raise ValueError('home button %r: %s must be {"on": "...", "off": "..."} (1-12 characters)' % (bid, key))
+    wm = b.get("warn_minutes")
+    if wm is not None and not (_num(wm) and 1 <= wm <= 1440):
+        raise ValueError("home button %r: warn_minutes must be 1-1440" % bid)
+
+
+def _iso_ms(value):
+    """HA's last_changed ("2026-10-27T04:22:35.736506+00:00") -> epoch ms, or None."""
+    try:
+        return int(datetime.fromisoformat(str(value)).timestamp() * 1000)
+    except (TypeError, ValueError):
+        return None
 
 
 def validate_home_config(h):
@@ -127,8 +157,9 @@ def validate_home_config(h):
         if b["id"] in ids:
             raise ValueError("home button ids must be unique (%r)" % b["id"])
         ids.add(b["id"])
-    if sum(1 for b in h["buttons"] if b["kind"] == "media_switch") > 1:
-        raise ValueError("home.buttons: at most one media_switch button")
+    for kind in ("media_switch", "away"):
+        if sum(1 for b in h["buttons"] if b["kind"] == kind) > 1:
+            raise ValueError("home.buttons: at most one %s button" % kind)
 
 
 class ActionError(Exception):
@@ -156,6 +187,7 @@ class Home:
         self._last_error = None  # (time, message) of the last failed background switch
         self._ha_error = None    # why the last HA states fetch failed, for the tablet
         self._thread = None
+        self.away = None         # away.AwayMode, set by the server; used by kind "away" buttons
 
     # --- media switch -------------------------------------------------------------------
 
@@ -259,7 +291,7 @@ class Home:
     # --- Home Assistant -----------------------------------------------------------------
 
     def _token(self):
-        key, problem = assistant_mod.load_api_key(self.env_path, (self.cfg["ha_token_name"],))
+        key, problem = envfile.load_api_key(self.env_path, (self.cfg["ha_token_name"],))
         return key, problem
 
     def _ha(self, method, path, body=None):
@@ -302,7 +334,7 @@ class Home:
 
     def ha_states(self, fresh=False):
         """{entity_id: state} for the entities the buttons show, or None if HA is unavailable."""
-        wanted = {b["state_entity"] for b in self.cfg["buttons"] if b["kind"] == "ha" and b.get("state_entity")}
+        wanted = {b["state_entity"] for b in self.cfg["buttons"] if b["kind"] in ("ha", "sensor") and b.get("state_entity")}
         if not wanted:
             return {}
         rows = self.ha_rows(fresh)
@@ -324,6 +356,11 @@ class Home:
         self._ha("POST", "/api/services/%s/%s" % (domain, name), {"entity_id": entity_id})
         with self._lock:
             self._ha_cache = (0.0, None, False)
+
+    def ha_notify(self, service, title, message):
+        """Push a message through an HA notify service, e.g. notify.mobile_app_<phone> (companion app)."""
+        domain, name = service.split(".", 1)
+        self._ha("POST", "/api/services/%s/%s" % (domain, name), {"title": title, "message": message})
 
     def ha_image(self, entity_id, limit=4194304):
         """(bytes, content type) of a camera's current still via /api/camera_proxy, or raise ActionError."""
@@ -374,18 +411,32 @@ class Home:
         if not self.cfg["enabled"]:
             return out
         media = self.media_status() if any(b["kind"] == "media_switch" for b in buttons) else None
-        states = self.ha_states() if any(b["kind"] == "ha" for b in buttons) else {}
+        states = self.ha_states() if any(b["kind"] in ("ha", "sensor") for b in buttons) else {}
         for b in buttons:
             item = {"id": b["id"], "label": b["label"], "kind": b["kind"], "confirm": b.get("confirm", False),
                     "icon": b.get("icon", "")}
             if b["kind"] == "media_switch":
                 item["media"] = self._media_extra(dict(media))
+            elif b["kind"] == "away":
+                item["state"] = self.away.state() if self.away else None
+                item["hint"] = self.away.hint() if self.away else "away mode is not running"
             elif b.get("state_entity"):
                 item["state"] = None if states is None else states.get(b["state_entity"])
+                if b["kind"] == "sensor":
+                    item.update(self._sensor_extra(b, item["state"]))
             out["buttons"].append(item)
         out["ha_ok"] = states is not None
         out["ha_error"] = None if states is not None else self.ha_problem()
         return out
+
+    def _sensor_extra(self, b, st):
+        """since_ms (HA's last_changed), the words to show, and warn once it has been on for warn_minutes."""
+        row = (self.ha_rows() or {}).get(b["state_entity"]) or {}
+        since = _iso_ms(row.get("last_changed")) if st is not None else None
+        wm = b.get("warn_minutes")
+        on = st in ON_STATES
+        return {"since_ms": since, "words": b.get("words", {"on": "On", "off": "Off"}), "warn_minutes": wm,
+                "warn": bool(wm and on and since and self.clock() * 1000 - since >= wm * 60000)}
 
     def _rate_check(self, button_id):
         now = self.clock()
@@ -405,6 +456,8 @@ class Home:
         """'on', 'off' or None (unknown / no state) for one button. Media switch: 'plex'/'jellyfin'/..."""
         if button["kind"] == "media_switch":
             return self.media_status()["current"]
+        if button["kind"] == "away":
+            return self.away.state() if self.away else None
         ent = button.get("state_entity")
         if not ent:
             return None
@@ -434,6 +487,10 @@ class Home:
             return {"ok": True, "changed": True, "pending": True, "state": target}
         if want not in ("on", "off", "press"):
             raise ActionError("unknown action", 400)
+        if button["kind"] == "sensor":
+            raise ActionError("%s only shows a state" % button["label"], 400)
+        if button["kind"] == "away":
+            return self._away_set(button_id, want)
         if want != "press":
             if not button.get("state_entity"):
                 raise ActionError("this button can only be pressed", 400)
@@ -457,11 +514,30 @@ class Home:
         button = self.button(button_id)
         if button is None:
             raise ActionError("unknown button", 404)
+        if button["kind"] == "sensor":
+            raise ActionError("%s only shows a state" % button["label"], 400)
         self._rate_check(button_id)
         if button["kind"] == "media_switch":
             target = self.start_media_switch()
             log.info("home: %s -> switching to %s", button_id, target)
             return {"ok": True, "pending": True, "target": target}
+        if button["kind"] == "away":
+            self._away_set(button_id, "press", checked=True)
+            return {"ok": True}
         service = self.ha_call(button)
         log.info("home: %s -> %s %s", button_id, service, button["entity_id"])
         return {"ok": True}
+
+    def _away_set(self, button_id, want, checked=False):
+        """Away mode on/off ('press' toggles). Needs no Home Assistant to switch, only to light up."""
+        if self.away is None:
+            raise ActionError("away mode is not running", 503)
+        if want == "press":
+            want = "off" if self.away.state() == "on" else "on"
+        if self.away.state() == want:
+            return {"ok": True, "changed": False, "state": want}
+        if not checked:
+            self._rate_check(button_id)
+        self.away.set(want == "on")
+        log.info("home: away mode -> %s", want)
+        return {"ok": True, "changed": True, "state": want}

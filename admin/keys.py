@@ -3,7 +3,6 @@ import os
 import re
 import time
 
-import assistant as assistant_mod
 import envfile
 import gcal as gcal_mod
 import health as health_mod
@@ -59,7 +58,7 @@ class KeysMixin:
             ok = health_mod._http_url(value) and len(value) <= 1000 and not re.search(r"\s", value)
         else:
             value = re.sub(r"\s", "", value)
-            ok = bool((k.get("regex") or assistant_mod.KEY_RE).match(value))
+            ok = bool((k.get("regex") or envfile.KEY_RE).match(value))
         if not ok:
             raise ApiError(400, "That doesn't look like a valid %s. Nothing was saved." % k["label"])
         names = [k["name"]] + k.get("aliases", [])
@@ -113,7 +112,7 @@ class KeysMixin:
             return self._cloud_test("assistant")
         if kind == "groq":
             v = self.app.voice
-            key, problem = assistant_mod.load_api_key(v.env_path, voice_mod.KEY_NAMES)
+            key, problem = envfile.load_api_key(v.env_path, voice_mod.KEY_NAMES)
             if not key:
                 return {"ok": False, "error": problem}
             ids = self._fetch_models(v.cfg["base_url"], key)

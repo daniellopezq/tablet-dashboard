@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import fallback as fb  # noqa: E402
 import test_assistant as ta  # noqa: E402  (module import: avoids re-collecting its tests)
 import test_voice as tv  # noqa: E402
+import util  # noqa: E402
 from test_server import start_thread_server  # noqa: E402
 
 NO_RESPONSE = 0.5
@@ -262,7 +263,7 @@ class AssistantFallbackTests(ta.AssistantTestCase):
         if cloud_port is not None:
             cfg["base_url"] = "http://127.0.0.1:%d/v1" % cloud_port
         cfg.update(over)
-        return self.direct(ta.am.now_ms, **cfg)
+        return self.direct(util.now_ms, **cfg)
 
     def test_no_response_falls_back_to_local(self):
         ai = self.ai(self.hole.port)

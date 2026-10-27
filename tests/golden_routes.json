@@ -190,6 +190,13 @@
    "alert": null,
    "cameras": [],
    "enabled": true,
+   "laundry": {
+    "alert": null,
+    "enabled": false,
+    "last": null,
+    "lines": [],
+    "running": false
+   },
    "live_max_seconds": 600,
    "popup_seconds": 60
   },

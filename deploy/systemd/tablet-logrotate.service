@@ -1,0 +1,7 @@
+# Rotates logs/*.log (installed by scripts/install-autostart.sh with tablet-logrotate.timer; @DIR@ is the project folder).
+[Unit]
+Description=Tablet dashboard log rotation
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/logrotate --state @DIR@/run/logrotate.state @DIR@/run/logrotate.conf

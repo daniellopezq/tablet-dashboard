@@ -7,8 +7,9 @@ import weather from './sections/weather.js';
 import maps from './sections/maps.js';
 import uptime from './sections/uptime.js';
 import calendar from './sections/calendar.js';
-import home, { homeInterval } from './sections/home.js';
+import home, { homeInterval, watchHome } from './sections/home.js';
 import cameras, { watchMotion } from './sections/cameras.js';
+import { watchLaundry } from './sections/laundry.js';
 import ask, { setHttpsPort } from './sections/ask.js';
 import { overview } from './sections/overview.js';
 
@@ -113,6 +114,8 @@ export async function start() {
   footer();
   banner();
   watchMotion($('alert'));
+  watchLaundry($('laundry-alert'));
+  watchHome($('home-alert'));
   window.addEventListener('hashchange', render);
   render();
 }

@@ -1,10 +1,14 @@
 """/api/admin/*: thin HTTP wrapper around AdminService (admin/service.py), https + LAN only."""
 import urllib.parse
 
+import httpcore
+
 
 def allowed(h):
-    """Admin is served only on the https listener and only to LAN clients."""
-    return getattr(h.server, "is_tls", False) and h.is_lan() and h.app.cfg["admin"]["enabled"]
+    """Admin is served only on the https listener and only to LAN clients (assistant.trusted_ips
+    does not apply: remote devices get the dashboard, not the admin panel)."""
+    return (getattr(h.server, "is_tls", False) and httpcore.is_lan_client(h.client_address[0])
+            and h.app.cfg["admin"]["enabled"])
 
 
 def get(h, path, head):

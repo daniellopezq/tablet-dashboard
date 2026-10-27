@@ -9,6 +9,7 @@ import urllib.parse
 import urllib.request
 
 import netsim
+from util import now_ms
 
 # WMO weather interpretation codes, per https://open-meteo.com/en/docs
 WMO_CODES = {
@@ -45,9 +46,6 @@ WMO_CODES = {
 
 log = logging.getLogger("dashboard.weather")
 
-
-def now_ms():
-    return int(time.time() * 1000)
 
 
 def _is_number(value):
@@ -91,6 +89,8 @@ class WeatherService:
                        "wind_speed_10m,wind_gusts_10m",
             "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,"
                      "precipitation_probability_max",
+            "hourly": "precipitation_probability,precipitation",
+            "forecast_hours": "12",  # from the current hour; the laundry check looks at the first few
             "timezone": w["timezone"],
             "temperature_unit": w["temperature_unit"],
             "forecast_days": "4",
@@ -194,7 +194,24 @@ class WeatherService:
             },
             "today": days[0],
             "forecast": days[1:],
+            "next_hours": self._next_hours(raw.get("hourly")),
         }
+
+    @staticmethod
+    def _next_hours(hourly):
+        """[{time, precipitation_probability, precipitation}] from the current hour; [] when missing."""
+        if not isinstance(hourly, dict) or not isinstance(hourly.get("time"), list):
+            return []
+        out = []
+        for i, t in enumerate(hourly["time"][:12]):
+            if not isinstance(t, str) or len(t) > 20:
+                break
+            prob = _nth(hourly.get("precipitation_probability"), i)
+            mm = _nth(hourly.get("precipitation"), i)
+            out.append({"time": t,
+                        "precipitation_probability": prob if _is_number(prob) else None,
+                        "precipitation": mm if _is_number(mm) else None})
+        return out
 
     def fetch_once(self):
         """Fetch and cache weather. Returns True on success. Never raises."""

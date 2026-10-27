@@ -4,13 +4,13 @@ Content types, the page CSP, safe path resolution, Range parsing, and ResponseMi
 send_* helpers and request-body checks that every route uses.
 """
 import email.utils
+import ipaddress
 import json
 import logging
 import os
 import re
 import urllib.parse
 
-import assistant as assistant_mod
 
 STATIC_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -72,6 +72,56 @@ def parse_range(header, size):
     return start, min(end, size - 1)
 
 
+
+# --- request checks -----------------------------------------------------------------------
+
+def is_lan_client(ip, trusted=()):
+    """True for loopback and private-range clients, plus the exact addresses in `trusted`
+    (assistant.trusted_ips, e.g. Tailscale devices)."""
+    try:
+        addr = ipaddress.ip_address(ip.split("%")[0])
+    except ValueError:
+        return False
+    if addr.version == 6 and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped
+    if addr.is_loopback or addr.is_private or addr.is_link_local:
+        return True
+    return any(ipaddress.ip_address(t) == addr for t in trusted)
+
+
+def _host_only(value):
+    value = (value or "").strip().lower()
+    if value.startswith("["):
+        return value[1:].split("]")[0]
+    return value.rsplit(":", 1)[0] if value.count(":") == 1 else value
+
+
+def check_origin(headers, allowed_hosts):
+    """Return an error string for cross-origin or rebinding-suspect requests, else None."""
+    host = headers.get("Host", "")
+    hostname = _host_only(host)
+    if not hostname:
+        return "missing host"
+    is_ip = True
+    try:
+        ipaddress.ip_address(hostname)
+    except ValueError:
+        is_ip = False
+    if not is_ip and hostname != "localhost" and hostname not in [h.lower() for h in allowed_hosts]:
+        return "host not allowed"
+    origin = headers.get("Origin")
+    if origin is not None:
+        if origin == "null":
+            return "cross-origin"
+        parts = urllib.parse.urlsplit(origin)
+        if parts.scheme not in ("http", "https") or parts.netloc.lower() != host.strip().lower():
+            return "cross-origin"
+    site = headers.get("Sec-Fetch-Site")
+    if site is not None and site not in ("same-origin", "none"):
+        return "cross-site"
+    return None
+
+
 class ResponseMixin:
     """Mixed into the BaseHTTPRequestHandler subclass. Expects self.server.app."""
 
@@ -87,10 +137,10 @@ class ResponseMixin:
         return (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
 
     def is_lan(self):
-        return assistant_mod.is_lan_client(self.client_address[0])
+        return is_lan_client(self.client_address[0], self.app.assistant.cfg["trusted_ips"])
 
     def cross_origin(self):
-        return assistant_mod.check_origin(self.headers, self.app.assistant.cfg["allowed_hosts"])
+        return check_origin(self.headers, self.app.assistant.cfg["allowed_hosts"])
 
     def read_body(self, max_bytes, empty_msg, too_large_msg, incomplete_msg):
         """Read a Content-Length body for the assistant-style API. Returns the bytes, or None
@@ -215,6 +265,13 @@ class ResponseMixin:
         if path.startswith("/api/") and isinstance(code, int) and code < 400:
             return
         super().log_request(code, size)
+
+    def log_error(self, fmt, *args):
+        # Idle keep-alive connections time out all the time; that's not an error.
+        if fmt.startswith("Request timed out"):
+            log.debug("%s %s", self.address_string(), fmt % args)
+            return
+        super().log_error(fmt, *args)
 
     def log_message(self, fmt, *args):
         log.info("%s %s", self.address_string(), fmt % args)

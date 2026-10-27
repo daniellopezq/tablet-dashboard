@@ -12,6 +12,131 @@ that period.
 ---
 
 Versions 0.21.3 to 0.25.1 were developed on the author's own server and published together.
+Versions 0.26.0 to 0.30.1 were published together in the same way.
+
+## 0.30.1 (2026-10-26): Big files split up (no behaviour change)
+
+**Changed**
+- `assistant.py` (1,141 lines → 770): usage limits to `usage.py` (shared with Voice), cloud calls (no redirects,
+  bounded size/time, error categories) to `upstream.py`, API key loading to `envfile.py`, the LAN and same-origin
+  checks to `httpcore.py`, and the helpers copied in seven modules (`_num`, `now_ms`) to `util.py`.
+- `gcal.py`: the Google sign-in (PKCE, auth URL, redirect, code exchange) and the command line moved to
+  `gcal_auth.py`; `python3 gcal.py auth|status|test|revoke` still works.
+- `cameras.py`: the live MJPEG feed (`LiveFeed`, one on-demand ffmpeg per stream) moved to `livefeed.py`.
+- The tablet client `web/app.js` (2,361 lines) is now ten ES5 files in `web/js/`, one per tab plus `core.js` and
+  `main.js`, loaded in order by `index.html`. The code is unchanged line for line; the files share globals instead
+  of one wrapper function. Checked: no top-level name collides with a `window` property, and no file runs code at
+  load time that needs a later file.
+- README layout table: the new modules, plus `home.py` and `cameras.py`, which were missing.
+
+**Added**
+- `tests/test_classic_js.py`: every `web/js` file is loaded (core first, main last), ES5 syntax only, top-level
+  names unique across files.
+
+## 0.30.0 (2026-10-26): Read-only sensor tiles
+
+**Added**
+- Home button kind `sensor`: a read-only tile for a Home Assistant entity, with its own words (Open/Closed),
+  "since" time, and `warn_minutes` (amber tile plus a banner on every tab of the tablet and the modern view). The
+  assistant can report it but never switch it.
+- README example: a garage door tile fed by the opener app's phone notifications (MyQ) through the Home Assistant
+  app's "Last notification" sensor and an HA automation that sets an `input_boolean` from `notificationType`.
+- Icon `garage.svg`.
+
+**Changed**
+- The tablet polls `/api/home` every 30 s on other tabs while a tile has `warn_minutes`.
+- "N on" counts on the Home tab leave out read-only tiles.
+
+## 0.29.0 (2026-10-26): Laundry check and rain chance in the modern view; quieter, rotated logs
+
+**Added**
+- Modern view: a **Clotheslines** panel on the Cameras page (each line's last result, why and when the check ran,
+  **Check now**), and an amber banner on every screen when a check finds laundry out, until dismissed (remembered on
+  the device). It reads the laundry status already in `/api/cameras`, so there's no extra polling.
+- Modern view: rain chance for the next 12 hours on the Weather page and its Overview card, one bar per hour; hours of
+  50% or more (where the laundry check starts) are highlighted.
+- `/api/cameras` → `laundry.lines`: the configured clotheslines (id, label), so the panel can list them before the
+  first check.
+- Log rotation: `deploy/logrotate/tablet-dashboard.conf` and the `tablet-logrotate` user timer, installed by
+  `scripts/install-autostart.sh`.
+
+**Changed**
+- The weather reading now has 12 hours of hourly rain data (was 6); the laundry check still looks at the first 3.
+- Quieter log (about 85% fewer lines): the background Blink snapshots (about 4,100 lines a day), dropped TLS
+  connections and idle keep-alive timeouts are logged at DEBUG. Snapshots asked for by a person stay at INFO.
+
+## 0.28.1 (2026-10-26): README refresh
+
+**Changed**
+- README: the automations and remote access over Tailscale are described.
+
+## 0.28.0 (2026-10-26): Trusted remote devices (Tailscale)
+
+**Added**
+- `assistant.trusted_ips`: exact IP addresses treated like home-network clients, so your own Tailscale devices get
+  Calendar, Home, Cameras, Uptime and Ask from anywhere. Ranges and `0.0.0.0` are rejected; an address not on the
+  list (even another `100.x` Tailscale address) is still refused. The admin panel ignores the list and stays
+  home-network only.
+
+## 0.27.2 (2026-10-26): Health: qBittorrent check fixed
+
+**Fixed**
+- A health target pointed at the wrong address on the author's server. Config change only (`health.targets`); no
+  code change.
+
+## 0.27.1 (2026-10-26): Away mode: rooms overlap at random
+
+**Changed**
+- Away mode: 35% of the time (`overlap_chance`), the next room light comes on 10-30 min (`overlap_minutes`) before
+  the last one goes off, so both rooms are lit together, like two people at home. Otherwise it still hands over
+  with a short gap. The same light is never planned on twice at once.
+
+## 0.27.0 (2026-10-26): Away mode: random lights after dark
+
+**Added**
+- `away.py`: while away mode is on, the house looks lived in after dark. When Home Assistant's `sun.sun` goes below
+  the horizon, a new random plan is drawn for the night. The room lights take turns for 40-60 minutes each. They hand over with a short gap or a few minutes of overlap, like someone
+  walking between rooms. The `short` lights (e.g. bathrooms) get short visits (3-12 min, every 35-80 min), plus one visit just
+  before bed. Everything goes off at a random bedtime between 23:00 and 24:00. The plan starts 5-25 min after
+  sunset. Each night is different. Turning the mode off turns off only the lights it turned on. The on/off choice
+  and those lights survive a restart (`data/away.json`). A failed HA call is retried for up to 20 min.
+- A new Home tab button kind `away` ("Modo fuera"). While on, the tile shows the next change ("Next: Bathroom on at
+  20:14") or "Waits for sunset". The voice assistant can switch it ("activa el modo fuera" -> "Modo fuera: activado.").
+- Config: `away` (lights with role `room` or `short`, minute ranges, bedtime window), plus the button in
+  `home.buttons`.
+
+## 0.26.0 (2026-10-25): First automation: rain coming -> laundry check
+
+**Added**
+- `laundry.py`: after each weather update, if it rains now or the hourly chance reaches 50% within 3 hours (daylight
+  only), a background thread drives the V380 to each clothesline and checks for laundry. Each recipe starts at the
+  right and top end stops, the only fixed points. It then measures how far the picture is shifted against a
+  reference picture of the empty line, nudges back while that's more than half a nudge (up to 3 times), and reads
+  the mean colour saturation in each line's boxes, moved by the remaining shift. Clothes about double it. Afterwards
+  the camera goes back to the street view. One check per rain spell (`repeat_hours` 6, `min_gap_minutes` 90).
+  A person moving the camera delays the check or stops it at once. A check takes about 6.5 min (around 140 nudges).
+- Warnings in Spanish: Home Assistant notify services (`laundry.notify_services`, empty until the HA companion app
+  is installed), plus a banner on the tablet that stays until tapped and a spoken line. Android Chrome only plays
+  sound after a tap since the page loaded.
+- `POST /api/laundry/check` (LAN only) runs a check now, whatever the weather. `/api/cameras` has a
+  `laundry` block (running, alert, last result).
+- Weather: an hourly precipitation chance for the next 6 hours (`next_hours`), from the same Open-Meteo request.
+- `Cameras.still()`, and `Cameras.move(..., by_person=False)` for automations. `last_person_move` records steps
+  from the tablet/assistant. `Home.ha_notify()`.
+- Frames are decoded by ffmpeg into raw RGB, so the server still uses only the standard library. Each check's frames are
+  saved to `data/ptz-map/checks/` (private, the newest 60 are kept). The map, recipes and references are in
+  `data/ptz-map/` (mapped 2026-10-25).
+
+**Tested live**
+- Three runs with the lines empty. The first used nudge fine-tuning and gave a false alarm on line 2, because the
+  boxes were off target and on blue-tinted shade. The fix is software alignment plus corrective nudges. Counted
+  nudges 0.3 s apart went about 2 nudges too far after 24, so they now have a 1 s pause. Run 3: both lines aligned
+  within half a nudge, both clearly empty (22/14 against thresholds 38/26, 28 against 52).
+
+**Tests**
+- `tests/test_laundry.py` (24): rain rule, pixels/alignment, a full check against a fake camera with end stops,
+  warnings, interruption by a person, trigger de-duplication, and config validation. `golden_routes.json` was
+  re-recorded for the new `laundry` block in `/api/cameras`.
 
 ## 0.25.1 (2026-10-25): Camera live view works with ffmpeg 6
 

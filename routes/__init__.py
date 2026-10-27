@@ -47,6 +47,7 @@ POST = {
     "/api/home/action": devices.post_home_action,
     "/api/cameras/snapshot": devices.post_camera_snapshot,
     "/api/cameras/control": devices.post_camera_control,
+    "/api/laundry/check": devices.post_laundry_check,
 }
 
 

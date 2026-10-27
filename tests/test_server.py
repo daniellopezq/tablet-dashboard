@@ -429,6 +429,29 @@ class HomeRouteTests(DashboardTestCase):
         resp.close()
         conn.close()
 
+    def test_laundry_check_route(self):
+        started = []
+        self.app.laundry.start = lambda why, why_es="": started.append(why) or len(started) == 1
+
+        def post(payload, headers=None):
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+            conn.request("POST", "/api/laundry/check", body=payload,
+                         headers=dict({"Content-Type": "application/json"}, **(headers or {})))
+            resp = conn.getresponse()
+            data = json.loads(resp.read() or b"{}")
+            conn.close()
+            return resp.status, data
+
+        self.assertEqual(post(b'{}')[0], 404)  # no lines configured
+        self.app.cfg["laundry"]["lines"] = [{"id": "line1"}]
+        self.addCleanup(self.app.cfg["laundry"].__setitem__, "lines", [])
+        self.assertEqual(post(b'{}'), (200, {"ok": True, "started": True}))
+        self.assertEqual(post(b'{}')[0], 409)  # already running
+        self.assertEqual(post(b'[1]')[0], 400)
+        self.assertEqual(post(b'{}', {"Host": "evil.example"})[0], 403)
+        self.assertEqual(len(started), 2)
+
+
 class MediaTests(DashboardTestCase):
     def setUp(self):
         self.port = self.serve(self.make_app())

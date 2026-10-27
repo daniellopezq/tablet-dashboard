@@ -11,7 +11,9 @@ CAMERA_ID = r"([a-z0-9_-]{1,32})"
 
 
 def get_camera_list(h, path, head):
-    h.send_json(h.app.cameras.snapshot(), head)
+    body = h.app.cameras.snapshot()
+    body["laundry"] = h.app.laundry.status()
+    h.send_json(body, head)
 
 
 def get_camera_path(h, path, head):
@@ -72,9 +74,9 @@ def stream_live(h, cid, head, hd=False):
         frames.close()
 
 
-def read_lan_json(h, what):
-    """Checks for the small LAN-only JSON POST routes. Returns the body (a dict with a string
-    "id"), or None after sending an error response."""
+def read_lan_json(h, what, need_id=True):
+    """Checks for the small LAN-only JSON POST routes. Returns the body (a dict, with a string
+    "id" unless need_id is False), or None after sending an error response."""
     h.close_connection = True  # early rejections leave the body unread
     if not h.is_lan():
         return h.send_api_error(403, "forbidden", "%s are available on the local network only." % what)
@@ -95,8 +97,10 @@ def read_lan_json(h, what):
         body = json.loads(raw.decode("utf-8"))
     except ValueError:
         body = None
-    if not isinstance(body, dict) or not isinstance(body.get("id"), str):
+    if need_id and not (isinstance(body, dict) and isinstance(body.get("id"), str)):
         return h.send_api_error(400, "bad_request", "Send {\"id\": \"...\"}.")
+    if not isinstance(body, dict):
+        return h.send_api_error(400, "bad_request", "Send a JSON object.")
     return body
 
 
@@ -122,6 +126,17 @@ def post_camera_snapshot(h):
     except home_mod.ActionError as exc:
         return h.send_api_error(exc.code, "camera_error", str(exc))
     h.send_json(body, False)
+
+
+def post_laundry_check(h):
+    """POST /api/laundry/check {}: look at the clotheslines now, whatever the weather. LAN only."""
+    if read_lan_json(h, "Laundry check", need_id=False) is None:
+        return
+    if not h.app.cfg["laundry"]["lines"]:
+        return h.send_api_error(404, "not_configured", "No clotheslines in config.json (laundry.lines).")
+    if not h.app.laundry.start("check asked from the dashboard"):
+        return h.send_api_error(409, "busy", "A laundry check is already running.")
+    h.send_json({"ok": True, "started": True}, False)
 
 
 def post_camera_control(h):
